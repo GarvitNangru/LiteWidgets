@@ -44,6 +44,16 @@ static LRESULT CALLBACK WidgetWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM
             }
             return 0;
         }
+        case WM_WINDOWPOSCHANGING: {
+            // Prevent Win+D from hiding/minimizing the widget
+            WINDOWPOS* wp = (WINDOWPOS*)lParam;
+            if (wp->flags & SWP_HIDEWINDOW) {
+                wp->flags &= ~SWP_HIDEWINDOW;
+            }
+            // Always keep at bottom
+            wp->hwndInsertAfter = HWND_BOTTOM;
+            return 0;
+        }
         case WM_NCHITTEST: {
             if (w && w->click_through) {
                 return HTTRANSPARENT;
@@ -113,18 +123,8 @@ bool Widget_Init(Widget* w, HINSTANCE hInstance, const WidgetVtable* vt, int x, 
 
     if (!w->hwnd) return false;
 
-    // Attach to WorkerW
-    HWND hDesktop = DesktopHost_GetParent();
-    if (hDesktop) {
-        // Adjust coordinates relative to the virtual screen top-left (for multi-monitor)
-        int vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
-        int vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
-        
-        SetParent(w->hwnd, hDesktop);
-        SetWindowPos(w->hwnd, HWND_TOP, x - vx, y - vy, width, height, SWP_NOACTIVATE);
-    } else {
-        SetWindowPos(w->hwnd, HWND_BOTTOM, x, y, width, height, SWP_NOACTIVATE);
-    }
+    // Desktop integration: Keep as top-level window at the bottom of the Z-order
+    SetWindowPos(w->hwnd, HWND_BOTTOM, x, y, width, height, SWP_NOACTIVATE);
 
     return true;
 }
