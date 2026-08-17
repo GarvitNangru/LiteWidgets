@@ -109,5 +109,8 @@ GpStatus WINGDIPAPI GdipDrawImageRectI(GpGraphics *graphics, GpImage *image, INT
 GpStatus WINGDIPAPI GdipDisposeImage(GpImage *image);
 GpStatus WINGDIPAPI GdipGetImageWidth(GpImage *image, UINT *width);
 GpStatus WINGDIPAPI GdipGetImageHeight(GpImage *image, UINT *height);
+GpStatus WINGDIPAPI GdipCreateBitmapFromScan0(INT width, INT height, INT stride, INT format, BYTE* scan0, GpBitmap** bitmap);
+GpStatus WINGDIPAPI GdipGetImageGraphicsContext(GpImage *image, GpGraphics **graphics);
+GpStatus WINGDIPAPI GdipCreateHBITMAPFromBitmap(GpBitmap* bitmap, HBITMAP* hbmReturn, ARGB background);
 
 #endif // GDIP_HELPERS_H

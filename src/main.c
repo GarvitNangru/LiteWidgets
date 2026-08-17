@@ -118,10 +118,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_TaskbarRestartMsg = RegisterWindowMessageA("TaskbarCreated");
 
     // 4. Load Config
-    char currentDir[MAX_PATH];
-    GetCurrentDirectoryA(MAX_PATH, currentDir);
+    char exePath[MAX_PATH];
+    GetModuleFileNameA(NULL, exePath, MAX_PATH);
+    char* lastSlash = strrchr(exePath, '\\');
+    if (lastSlash) {
+        *lastSlash = '\0';
+    }
+    
     char iniPath[MAX_PATH];
-    snprintf(iniPath, MAX_PATH, "%s\\config\\widgets.ini", currentDir);
+    // Check if we are in bin folder
+    char* binCheck = strrchr(exePath, '\\');
+    if (binCheck && _stricmp(binCheck + 1, "bin") == 0) {
+        *binCheck = '\0'; // go up one level
+    }
+    
+    snprintf(iniPath, MAX_PATH, "%s\\config\\widgets.ini", exePath);
     
     Config_Load(iniPath, hInstance);
 

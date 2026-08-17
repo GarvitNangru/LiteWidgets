@@ -132,46 +132,38 @@ bool Widget_Init(Widget* w, HINSTANCE hInstance, const WidgetVtable* vt, int x, 
 void Widget_Render(Widget* w) {
     if (!w || !w->hwnd || !w->vt->render) return;
 
-    HDC hdcScreen = GetDC(NULL);
-    HDC hdcMem = CreateCompatibleDC(hdcScreen);
-
-    BITMAPINFO bmi = {0};
-    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth = w->width;
-    bmi.bmiHeader.biHeight = -(w->height); // top-down
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = BI_RGB;
-
-    void* pvBits = NULL;
-    HBITMAP hBmp = CreateDIBSection(hdcMem, &bmi, DIB_RGB_COLORS, &pvBits, NULL, 0);
-    HBITMAP hOldBmp = (HBITMAP)SelectObject(hdcMem, hBmp);
-
+    // PixelFormat32bppPARGB is 0x000E200B
+    GpBitmap* pBitmap = NULL;
+    GdipCreateBitmapFromScan0(w->width, w->height, 0, 0x000E200B, NULL, &pBitmap);
     GpGraphics* pGraphics = NULL;
-    GdipCreateFromHDC(hdcMem, &pGraphics);
+    GdipGetImageGraphicsContext((GpImage*)pBitmap, &pGraphics);
+    
     GdipSetSmoothingMode(pGraphics, SmoothingModeAntiAlias);
 
     // Call actual widget render
     w->vt->render(w, pGraphics, w->width, w->height);
 
-    // Setup for UpdateLayeredWindow
+    HBITMAP hBmp = NULL;
+    GdipCreateHBITMAPFromBitmap(pBitmap, &hBmp, 0);
+
+    HDC hdcScreen = GetDC(NULL);
+    HDC hdcMem = CreateCompatibleDC(hdcScreen);
+    HBITMAP hOldBmp = (HBITMAP)SelectObject(hdcMem, hBmp);
+
     POINT ptDst = { w->x, w->y };
-    if (GetParent(w->hwnd) != NULL) {
-        ptDst.x -= GetSystemMetrics(SM_XVIRTUALSCREEN);
-        ptDst.y -= GetSystemMetrics(SM_YVIRTUALSCREEN);
-    }
-    
     SIZE sizeDst = { w->width, w->height };
     POINT ptSrc = { 0, 0 };
     BLENDFUNCTION blend = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
 
     UpdateLayeredWindow(w->hwnd, hdcScreen, &ptDst, &sizeDst, hdcMem, &ptSrc, 0, &blend, ULW_ALPHA);
 
-    GdipDeleteGraphics(pGraphics);
     SelectObject(hdcMem, hOldBmp);
     DeleteObject(hBmp);
     DeleteDC(hdcMem);
     ReleaseDC(NULL, hdcScreen);
+
+    GdipDeleteGraphics(pGraphics);
+    GdipDisposeImage((GpImage*)pBitmap);
 }
 
 void Widget_SetClickThrough(Widget* w, bool enable) {
