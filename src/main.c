@@ -134,13 +134,32 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     
     snprintf(iniPath, MAX_PATH, "%s\\config\\widgets.ini", exePath);
     
+    FILE* logf = fopen("debug.log", "w");
+    if (logf) {
+        fprintf(logf, "Loading config: %s\n", iniPath);
+        fclose(logf);
+    }
+
     Config_Load(iniPath, hInstance);
 
     // 5. Message Loop
     MSG msg;
-    while (GetMessageA(&msg, NULL, 0, 0)) {
+    int ret;
+    while ((ret = GetMessageA(&msg, NULL, 0, 0)) != 0) {
+        if (ret == -1) {
+            if (logf = fopen("debug.log", "a")) {
+                fprintf(logf, "GetMessage error: %lu\n", GetLastError());
+                fclose(logf);
+            }
+            break;
+        }
         TranslateMessage(&msg);
         DispatchMessageA(&msg);
+    }
+
+    if (logf = fopen("debug.log", "a")) {
+        fprintf(logf, "Exiting gracefully\n");
+        fclose(logf);
     }
 
     // 6. Cleanup

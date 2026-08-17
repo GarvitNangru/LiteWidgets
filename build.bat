@@ -13,11 +13,7 @@ if not exist bin mkdir bin
 
 rc.exe /nologo /fo bin\app.res app.manifest.rc
 
-cl.exe /nologo /O2 /W3 /MT /Fe"bin\LiteWidgets.exe" /Fd"bin\LiteWidgets.pdb" /I src ^
-    src\main.c src\desktop.c src\widget.c src\config.c ^
-    src\widgets\clock.c src\widgets\image.c src\widgets\notes.c ^
-    bin\app.res ^
-    user32.lib gdi32.lib gdiplus.lib shell32.lib shcore.lib advapi32.lib
+cl.exe /nologo /O2 /W3 /MT /I src /Fe"bin\LiteWidgets.exe" src\main.c src\desktop.c src\widget.c src\config.c src\widgets\clock.c src\widgets\image.c src\widgets\notes.c bin\app.res /link user32.lib gdi32.lib gdiplus.lib shell32.lib shcore.lib advapi32.lib
 
 if %ERRORLEVEL% equ 0 (
     echo Build successful.
