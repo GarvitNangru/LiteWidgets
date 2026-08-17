@@ -1,5 +1,6 @@
 #include "widget.h"
 #include "desktop.h"
+#include <stdio.h>
 
 #define IDT_WIDGET_TIMER 1001
 
@@ -7,6 +8,19 @@ static LRESULT CALLBACK WidgetWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM
     Widget* w = (Widget*)GetWindowLongPtrA(hWnd, GWLP_USERDATA);
 
     switch (msg) {
+        case WM_WINDOWPOSCHANGING: {
+            WINDOWPOS* wp = (WINDOWPOS*)lParam;
+            if (wp->flags & SWP_HIDEWINDOW) {
+                wp->flags &= ~SWP_HIDEWINDOW;
+            }
+            break;
+        }
+        case WM_SYSCOMMAND: {
+            if ((wParam & 0xFFF0) == SC_MINIMIZE) {
+                return 0;
+            }
+            break;
+        }
         case WM_NCCREATE: {
             CREATESTRUCTA* cs = (CREATESTRUCTA*)lParam;
             SetWindowLongPtrA(hWnd, GWLP_USERDATA, (LONG_PTR)cs->lpCreateParams);
@@ -42,16 +56,6 @@ static LRESULT CALLBACK WidgetWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM
                     w->needs_render = false;
                 }
             }
-            return 0;
-        }
-        case WM_WINDOWPOSCHANGING: {
-            // Prevent Win+D from hiding/minimizing the widget
-            WINDOWPOS* wp = (WINDOWPOS*)lParam;
-            if (wp->flags & SWP_HIDEWINDOW) {
-                wp->flags &= ~SWP_HIDEWINDOW;
-            }
-            // Always keep at bottom
-            wp->hwndInsertAfter = HWND_BOTTOM;
             return 0;
         }
         case WM_NCHITTEST: {
@@ -116,17 +120,16 @@ bool Widget_Init(Widget* w, HINSTANCE hInstance, const WidgetVtable* vt, int x, 
         exStyle,
         "LiteWidgetClass",
         "LiteWidget",
-        WS_CHILD | WS_VISIBLE,
+        WS_POPUP | WS_VISIBLE,
         x, y, width, height,
-        DesktopHost_GetParent(), NULL, hInstance, w
+        DesktopHost_GetParent(), // Set WorkerW as owner
+        NULL, hInstance, w
     );
 
     if (!w->hwnd) return false;
 
-    // Adjust coordinates relative to the virtual screen top-left (for multi-monitor)
-    int vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
-    int vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
-    SetWindowPos(w->hwnd, HWND_TOP, x - vx, y - vy, width, height, SWP_NOACTIVATE);
+    // Desktop integration: Keep as top-level window at the bottom of the Z-order
+    SetWindowPos(w->hwnd, HWND_BOTTOM, x, y, width, height, SWP_NOACTIVATE);
 
     return true;
 }
@@ -152,20 +155,12 @@ void Widget_Render(Widget* w) {
     HDC hdcMem = CreateCompatibleDC(hdcScreen);
     HBITMAP hOldBmp = (HBITMAP)SelectObject(hdcMem, hBmp);
 
-    POINT ptSrc = { 0, 0 };
+    POINT ptDst = { w->x, w->y };
     SIZE sizeDst = { w->width, w->height };
+    POINT ptSrc = { 0, 0 };
     BLENDFUNCTION blend = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
 
-    UPDATELAYEREDWINDOWINFO info = {0};
-    info.cbSize = sizeof(UPDATELAYEREDWINDOWINFO);
-    info.hdcDst = hdcScreen;
-    info.psize = &sizeDst;
-    info.hdcSrc = hdcMem;
-    info.pptSrc = &ptSrc;
-    info.pblend = &blend;
-    info.dwFlags = ULW_ALPHA;
-
-    UpdateLayeredWindowIndirect(w->hwnd, &info);
+    UpdateLayeredWindow(w->hwnd, hdcScreen, &ptDst, &sizeDst, hdcMem, &ptSrc, 0, &blend, ULW_ALPHA);
 
     SelectObject(hdcMem, hOldBmp);
     DeleteObject(hBmp);
