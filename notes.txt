@@ -1,0 +1,7 @@
+Welcome to LiteWidgets!
+This is a sample text file.
+It is loaded once at startup.
+
+To update, edit this file, save, 
+and right click the tray icon 
+to select "Reload Widgets".
