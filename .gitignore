@@ -1,0 +1,21 @@
+# Build artifacts
+build/
+bin/
+*.obj
+*.exe
+*.pdb
+*.ilk
+
+# VS / CMake
+.vs/
+.vscode/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+
+# Local config
+config/widgets.local.ini
