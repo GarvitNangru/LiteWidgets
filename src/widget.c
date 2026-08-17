@@ -123,8 +123,18 @@ bool Widget_Init(Widget* w, HINSTANCE hInstance, const WidgetVtable* vt, int x, 
 
     if (!w->hwnd) return false;
 
-    // Desktop integration: Keep as top-level window at the bottom of the Z-order
-    SetWindowPos(w->hwnd, HWND_BOTTOM, x, y, width, height, SWP_NOACTIVATE);
+    // Attach to WorkerW
+    HWND hDesktop = DesktopHost_GetParent();
+    if (hDesktop) {
+        // Adjust coordinates relative to the virtual screen top-left (for multi-monitor)
+        int vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        int vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        
+        SetParent(w->hwnd, hDesktop);
+        SetWindowPos(w->hwnd, HWND_TOP, x - vx, y - vy, width, height, SWP_NOACTIVATE);
+    } else {
+        SetWindowPos(w->hwnd, HWND_BOTTOM, x, y, width, height, SWP_NOACTIVATE);
+    }
 
     return true;
 }
@@ -150,12 +160,11 @@ void Widget_Render(Widget* w) {
     HDC hdcMem = CreateCompatibleDC(hdcScreen);
     HBITMAP hOldBmp = (HBITMAP)SelectObject(hdcMem, hBmp);
 
-    POINT ptDst = { w->x, w->y };
-    SIZE sizeDst = { w->width, w->height };
     POINT ptSrc = { 0, 0 };
+    SIZE sizeDst = { w->width, w->height };
     BLENDFUNCTION blend = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
 
-    UpdateLayeredWindow(w->hwnd, hdcScreen, &ptDst, &sizeDst, hdcMem, &ptSrc, 0, &blend, ULW_ALPHA);
+    UpdateLayeredWindow(w->hwnd, hdcScreen, NULL, &sizeDst, hdcMem, &ptSrc, 0, &blend, ULW_ALPHA);
 
     SelectObject(hdcMem, hOldBmp);
     DeleteObject(hBmp);
