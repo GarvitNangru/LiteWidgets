@@ -1,6 +1,5 @@
 #include "widget.h"
 #include "desktop.h"
-#include <stdio.h>
 
 #define IDT_WIDGET_TIMER 1001
 
@@ -29,12 +28,12 @@ static LRESULT CALLBACK WidgetWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM
         case WM_CREATE: {
             w = (Widget*)((CREATESTRUCTA*)lParam)->lpCreateParams;
             if (w && w->timer_interval_ms > 0) {
-                // Sync clock timers to second boundary
                 SYSTEMTIME st;
                 GetLocalTime(&st);
                 UINT delay = w->timer_interval_ms;
                 if (delay == 1000) {
                     delay = 1000 - st.wMilliseconds;
+                    if (delay == 0) delay = 1000;
                 }
                 SetTimer(hWnd, IDT_WIDGET_TIMER, delay, NULL);
             }
@@ -42,12 +41,11 @@ static LRESULT CALLBACK WidgetWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM
         }
         case WM_TIMER: {
             if (w && wParam == IDT_WIDGET_TIMER) {
-                // If it was the first synchronized tick, reset to regular interval
+                /* Reset to regular interval after first sync tick */
                 if (w->timer_interval_ms == 1000) {
                     KillTimer(hWnd, IDT_WIDGET_TIMER);
                     SetTimer(hWnd, IDT_WIDGET_TIMER, w->timer_interval_ms, NULL);
                 }
-                
                 if (w->vt->on_timer) {
                     w->vt->on_timer(w);
                 }
@@ -62,12 +60,7 @@ static LRESULT CALLBACK WidgetWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM
             if (w && w->click_through) {
                 return HTTRANSPARENT;
             }
-            // Allow dragging the widget if not click-through
             return HTCAPTION;
-        }
-        case WM_DPICHANGED: {
-            // Future enhancement: rescale fonts and sizes
-            return 0;
         }
         case WM_DESTROY: {
             if (w && w->timer_interval_ms > 0) {
@@ -96,9 +89,10 @@ static bool RegisterWidgetClass(HINSTANCE hInstance) {
     return false;
 }
 
-bool Widget_Init(Widget* w, HINSTANCE hInstance, const WidgetVtable* vt, int x, int y, int width, int height, UINT timer_interval_ms, bool click_through) {
+bool Widget_Init(Widget* w, HINSTANCE hInstance, const WidgetVtable* vt,
+                 int x, int y, int width, int height,
+                 UINT timer_interval_ms, bool click_through) {
     if (!w || !vt) return false;
-
     if (!RegisterWidgetClass(hInstance)) return false;
 
     w->vt = vt;
@@ -122,50 +116,55 @@ bool Widget_Init(Widget* w, HINSTANCE hInstance, const WidgetVtable* vt, int x, 
         "LiteWidget",
         WS_POPUP | WS_VISIBLE,
         x, y, width, height,
-        DesktopHost_GetParent(), // Set WorkerW as owner
+        DesktopHost_GetParent(),
         NULL, hInstance, w
     );
 
     if (!w->hwnd) return false;
 
-    // Desktop integration: Keep as top-level window at the bottom of the Z-order
     SetWindowPos(w->hwnd, HWND_BOTTOM, x, y, width, height, SWP_NOACTIVATE);
-
     return true;
 }
 
 void Widget_Render(Widget* w) {
     if (!w || !w->hwnd || !w->vt->render) return;
 
-    // PixelFormat32bppPARGB is 0x000E200B
     GpBitmap* pBitmap = NULL;
-    GdipCreateBitmapFromScan0(w->width, w->height, 0, 0x000E200B, NULL, &pBitmap);
+    GdipCreateBitmapFromScan0(w->width, w->height, 0, PixelFormat32bppPARGB, NULL, &pBitmap);
+    if (!pBitmap) return;
+
     GpGraphics* pGraphics = NULL;
     GdipGetImageGraphicsContext((GpImage*)pBitmap, &pGraphics);
-    
-    GdipSetSmoothingMode(pGraphics, SmoothingModeAntiAlias);
+    if (!pGraphics) {
+        GdipDisposeImage((GpImage*)pBitmap);
+        return;
+    }
 
-    // Call actual widget render
+    GdipSetSmoothingMode(pGraphics, SmoothingModeAntiAlias);
+    GdipSetTextRenderingHint(pGraphics, TextRenderingHintAntiAliasGridFit);
+
     w->vt->render(w, pGraphics, w->width, w->height);
 
     HBITMAP hBmp = NULL;
     GdipCreateHBITMAPFromBitmap(pBitmap, &hBmp, 0);
 
-    HDC hdcScreen = GetDC(NULL);
-    HDC hdcMem = CreateCompatibleDC(hdcScreen);
-    HBITMAP hOldBmp = (HBITMAP)SelectObject(hdcMem, hBmp);
+    if (hBmp) {
+        HDC hdcScreen = GetDC(NULL);
+        HDC hdcMem = CreateCompatibleDC(hdcScreen);
+        HBITMAP hOldBmp = (HBITMAP)SelectObject(hdcMem, hBmp);
 
-    POINT ptDst = { w->x, w->y };
-    SIZE sizeDst = { w->width, w->height };
-    POINT ptSrc = { 0, 0 };
-    BLENDFUNCTION blend = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
+        POINT ptDst = { w->x, w->y };
+        SIZE sizeDst = { w->width, w->height };
+        POINT ptSrc = { 0, 0 };
+        BLENDFUNCTION blend = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
 
-    UpdateLayeredWindow(w->hwnd, hdcScreen, &ptDst, &sizeDst, hdcMem, &ptSrc, 0, &blend, ULW_ALPHA);
+        UpdateLayeredWindow(w->hwnd, hdcScreen, &ptDst, &sizeDst, hdcMem, &ptSrc, 0, &blend, ULW_ALPHA);
 
-    SelectObject(hdcMem, hOldBmp);
-    DeleteObject(hBmp);
-    DeleteDC(hdcMem);
-    ReleaseDC(NULL, hdcScreen);
+        SelectObject(hdcMem, hOldBmp);
+        DeleteObject(hBmp);
+        DeleteDC(hdcMem);
+        ReleaseDC(NULL, hdcScreen);
+    }
 
     GdipDeleteGraphics(pGraphics);
     GdipDisposeImage((GpImage*)pBitmap);
@@ -181,16 +180,20 @@ void Widget_SetClickThrough(Widget* w, bool enable) {
         exStyle &= ~WS_EX_TRANSPARENT;
     }
     SetWindowLongPtrA(w->hwnd, GWL_EXSTYLE, exStyle);
+    SetWindowPos(w->hwnd, NULL, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 }
 
 void Widget_Destroy(Widget* w) {
-    if (w) {
-        if (w->vt->destroy) {
-            w->vt->destroy(w);
-        }
-        if (w->hwnd) {
-            DestroyWindow(w->hwnd);
-            w->hwnd = NULL;
-        }
+    if (!w) return;
+    /* Destroy window FIRST to stop messages, then free widget data */
+    HWND hwnd = w->hwnd;
+    w->hwnd = NULL;
+    if (hwnd) {
+        SetWindowLongPtrA(hwnd, GWLP_USERDATA, 0);
+        DestroyWindow(hwnd);
+    }
+    if (w->vt->destroy) {
+        w->vt->destroy(w);
     }
 }

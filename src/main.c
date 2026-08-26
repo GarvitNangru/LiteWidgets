@@ -8,7 +8,6 @@
 #include "widget.h"
 #include "config.h"
 
-// For DPI Awareness (Win 10+)
 typedef BOOL (WINAPI *pfnSetProcessDpiAwarenessContext)(DPI_AWARENESS_CONTEXT);
 
 #define WM_TRAYICON (WM_USER + 1)
@@ -22,10 +21,10 @@ static HWND g_hMainWnd = NULL;
 static void InitDpi(void) {
     HMODULE hUser32 = GetModuleHandleA("user32.dll");
     if (hUser32) {
-        pfnSetProcessDpiAwarenessContext setDpi = (pfnSetProcessDpiAwarenessContext)GetProcAddress(hUser32, "SetProcessDpiAwarenessContext");
+        pfnSetProcessDpiAwarenessContext setDpi =
+            (pfnSetProcessDpiAwarenessContext)GetProcAddress(hUser32, "SetProcessDpiAwarenessContext");
         if (setDpi) {
-            // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
-            setDpi((DPI_AWARENESS_CONTEXT)-4);
+            setDpi((DPI_AWARENESS_CONTEXT)-4); /* PER_MONITOR_AWARE_V2 */
         }
     }
 }
@@ -37,7 +36,7 @@ static void AddTrayIcon(HWND hWnd) {
     nid.uID = 1;
     nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     nid.uCallbackMessage = WM_TRAYICON;
-    nid.hIcon = LoadIcon(NULL, IDI_APPLICATION); // Default icon
+    nid.hIcon = LoadIcon(NULL, IDI_APPLICATION);
     strcpy_s(nid.szTip, sizeof(nid.szTip), "LiteWidgets");
     Shell_NotifyIconA(NIM_ADD, &nid);
 }
@@ -52,19 +51,18 @@ static void RemoveTrayIcon(HWND hWnd) {
 
 static void ShowTrayMenu(HWND hWnd, POINT pt) {
     HMENU hMenu = CreatePopupMenu();
-    InsertMenuA(hMenu, -1, MF_BYPOSITION | MF_STRING, ID_TRAY_RELOAD, "Reload Widgets (Currently restarts app entirely)");
+    InsertMenuA(hMenu, -1, MF_BYPOSITION | MF_STRING, ID_TRAY_RELOAD, "Reload Widgets");
     InsertMenuA(hMenu, -1, MF_BYPOSITION | MF_SEPARATOR, 0, NULL);
     InsertMenuA(hMenu, -1, MF_BYPOSITION | MF_STRING, ID_TRAY_EXIT, "Exit");
-    
+
     SetForegroundWindow(hWnd);
     TrackPopupMenu(hMenu, TPM_BOTTOMALIGN | TPM_LEFTALIGN, pt.x, pt.y, 0, hWnd, NULL);
-    PostMessage(hWnd, WM_NULL, 0, 0); // Fix menu dismissal
+    PostMessage(hWnd, WM_NULL, 0, 0);
     DestroyMenu(hMenu);
 }
 
 static LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (msg == g_TaskbarRestartMsg) {
-        // Explorer crashed and restarted, reconnect widgets to WorkerW
         DesktopHost_Reattach();
         return 0;
     }
@@ -81,7 +79,6 @@ static LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM l
             if (LOWORD(wParam) == ID_TRAY_EXIT) {
                 PostQuitMessage(0);
             } else if (LOWORD(wParam) == ID_TRAY_RELOAD) {
-                // Since this app has no complex state, the easiest way to fully reload configs is to restart the process.
                 char exePath[MAX_PATH];
                 GetModuleFileNameA(NULL, exePath, MAX_PATH);
                 ShellExecuteA(NULL, "open", exePath, NULL, NULL, SW_SHOWDEFAULT);
@@ -96,75 +93,72 @@ static LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM l
     return DefWindowProcA(hWnd, msg, wParam, lParam);
 }
 
+/*
+ * Resolve INI path: look for config/widgets.ini relative to the executable.
+ * Walks up from the exe directory to handle bin/ subfolder builds.
+ */
+static void ResolveIniPath(char* outPath, DWORD maxLen) {
+    char exeDir[MAX_PATH];
+    GetModuleFileNameA(NULL, exeDir, MAX_PATH);
+    /* Strip filename to get directory */
+    char* lastSlash = strrchr(exeDir, '\\');
+    if (lastSlash) *lastSlash = '\0';
+
+    /* Try: <exeDir>/config/widgets.ini */
+    _snprintf(outPath, maxLen, "%s\\config\\widgets.ini", exeDir);
+    if (GetFileAttributesA(outPath) != INVALID_FILE_ATTRIBUTES) return;
+
+    /* Try: <exeDir>/../config/widgets.ini (exe is in bin/) */
+    char* parentSlash = strrchr(exeDir, '\\');
+    if (parentSlash) {
+        *parentSlash = '\0';
+        _snprintf(outPath, maxLen, "%s\\config\\widgets.ini", exeDir);
+        if (GetFileAttributesA(outPath) != INVALID_FILE_ATTRIBUTES) return;
+    }
+
+    /* Fallback: just use the first attempt */
+    if (lastSlash) *lastSlash = '\\'; /* Restore */
+    _snprintf(outPath, maxLen, "%s\\config\\widgets.ini", exeDir);
+}
+
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
-    // 1. App Init
+    (void)hPrevInstance; (void)lpCmdLine; (void)nCmdShow;
+
+    /* 1. DPI */
     InitDpi();
-    
+
+    /* 2. GDI+ */
     GpStartupInput gdiInput = { 1, NULL, FALSE, FALSE };
     GdiplusStartup(&g_gdiplusToken, &gdiInput, NULL);
 
-    // 2. Main Window for message pumping & tray icon
+    /* 3. Main message window + tray icon */
     WNDCLASSA wc = {0};
     wc.lpfnWndProc = MainWndProc;
     wc.hInstance = hInstance;
     wc.lpszClassName = "LiteWidgetsMainClass";
     RegisterClassA(&wc);
 
-    g_hMainWnd = CreateWindowExA(0, "LiteWidgetsMainClass", "LiteWidgets", 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, hInstance, NULL);
+    g_hMainWnd = CreateWindowExA(0, "LiteWidgetsMainClass", "LiteWidgets", 0,
+                                 0, 0, 0, 0, HWND_MESSAGE, NULL, hInstance, NULL);
     AddTrayIcon(g_hMainWnd);
 
-    // 3. Desktop Shell Integration
+    /* 4. Desktop shell integration */
     DesktopHost_Init();
     g_TaskbarRestartMsg = RegisterWindowMessageA("TaskbarCreated");
 
-    // 4. Load Config
-    char exePath[MAX_PATH];
-    GetModuleFileNameA(NULL, exePath, MAX_PATH);
-    char* lastSlash = strrchr(exePath, '\\');
-    if (lastSlash) {
-        *lastSlash = '\0';
-    }
-    
+    /* 5. Load config and create widgets */
     char iniPath[MAX_PATH];
-    // Check if we are in bin folder
-    char* binCheck = strrchr(exePath, '\\');
-    if (binCheck && _stricmp(binCheck + 1, "bin") == 0) {
-        *binCheck = '\0'; // go up one level
-    }
-    
-    snprintf(iniPath, MAX_PATH, "%s\\config\\widgets.ini", exePath);
-    
-    FILE* logf = fopen("debug.log", "w");
-    if (logf) {
-        fprintf(logf, "Loading config: %s\n", iniPath);
-        fclose(logf);
-    }
-
+    ResolveIniPath(iniPath, MAX_PATH);
     Config_Load(iniPath, hInstance);
 
-    // 5. Message Loop
+    /* 6. Message loop */
     MSG msg;
-    int ret;
-    while ((ret = GetMessageA(&msg, NULL, 0, 0)) != 0) {
-        if (ret == -1) {
-            if (logf = fopen("debug.log", "a")) {
-                fprintf(logf, "GetMessage error: %lu\n", GetLastError());
-                fclose(logf);
-            }
-            break;
-        }
+    while (GetMessageA(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);
         DispatchMessageA(&msg);
     }
 
-    if (logf = fopen("debug.log", "a")) {
-        fprintf(logf, "Exiting gracefully\n");
-        fclose(logf);
-    }
-
-    // 6. Cleanup
-    // We intentionally leak widget memory here on exit because the OS cleans it up instantly.
-    // In a long-running system where widgets are created/destroyed dynamically, we'd loop and destroy them.
+    /* 7. Cleanup */
     GdiplusShutdown(g_gdiplusToken);
     return (int)msg.wParam;
 }

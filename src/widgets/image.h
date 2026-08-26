@@ -1,11 +1,12 @@
 #pragma once
-
-#ifndef WIDGET_IMAGE_H
-#define WIDGET_IMAGE_H
+#ifndef IMAGE_H
+#define IMAGE_H
 
 #include <windows.h>
 #include <stdbool.h>
 
-bool ImageWidget_Create(HINSTANCE hInstance, int x, int y, int width, int height, bool click_through, const WCHAR* path);
+bool ImageWidget_Create(HINSTANCE hInstance, const char* iniPath,
+                        int x, int y, int width, int height,
+                        bool click_through, const char* pathA);
 
-#endif
+#endif /* IMAGE_H */

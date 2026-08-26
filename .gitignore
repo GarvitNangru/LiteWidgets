@@ -1,21 +1,19 @@
 # Build artifacts
-build/
 bin/
 *.obj
-*.exe
 *.pdb
 *.ilk
+*.res
 
-# VS / CMake
+# Debug
+debug.log
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# IDE
 .vs/
 .vscode/
-CMakeCache.txt
-CMakeFiles/
-cmake_install.cmake
-*.sln
-*.vcxproj
-*.vcxproj.filters
-*.vcxproj.user
-
-# Local config
-config/widgets.local.ini
+*.user

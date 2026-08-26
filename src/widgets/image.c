@@ -2,10 +2,11 @@
 #include "../widget.h"
 #include <stdlib.h>
 #include <string.h>
+#include <shlwapi.h>
 
 typedef struct {
     Widget base;
-    GpImage* image; // Cached in memory
+    GpImage* image;
 } ImageWidgetData;
 
 static void Image_Render(Widget* base, GpGraphics* gfx, int width, int height) {
@@ -25,26 +26,46 @@ static void Image_Destroy(Widget* base) {
 
 static const WidgetVtable image_vtable = {
     Image_Render,
-    NULL, // No timer
+    NULL,
     Image_Destroy
 };
 
-bool ImageWidget_Create(HINSTANCE hInstance, int x, int y, int width, int height, bool click_through, const WCHAR* path) {
-    ImageWidgetData* w = (ImageWidgetData*)malloc(sizeof(ImageWidgetData));
-    if (!w) return false;
-    memset(w, 0, sizeof(ImageWidgetData));
+static void ResolveImagePath(const char* iniPathA, const char* pathA,
+                             WCHAR* outW, DWORD maxLen) {
+    WCHAR inputW[MAX_PATH];
+    MultiByteToWideChar(CP_UTF8, 0, pathA, -1, inputW, MAX_PATH);
 
-    // Load image once at startup
-    if (GdipCreateBitmapFromFile(path, (GpBitmap**)&w->image) != 0) { // 0 is Ok
-        // Failed to load
-        w->image = NULL; 
+    if (!PathIsRelativeW(inputW)) {
+        wcsncpy(outW, inputW, maxLen);
+        return;
     }
 
-    // Static widget, no timer (0 ms)
+    WCHAR iniDirW[MAX_PATH];
+    MultiByteToWideChar(CP_UTF8, 0, iniPathA, -1, iniDirW, MAX_PATH);
+    PathRemoveFileSpecW(iniDirW);
+    PathCombineW(outW, iniDirW, inputW);
+}
+
+bool ImageWidget_Create(HINSTANCE hInstance, const char* iniPath,
+                        int x, int y, int width, int height,
+                        bool click_through, const char* pathA) {
+    ImageWidgetData* w = (ImageWidgetData*)calloc(1, sizeof(ImageWidgetData));
+    if (!w) return false;
+
+    WCHAR resolvedPath[MAX_PATH];
+    ResolveImagePath(iniPath, pathA, resolvedPath, MAX_PATH);
+
+    if (GdipCreateBitmapFromFile(resolvedPath, (GpBitmap**)&w->image) != 0) {
+        w->image = NULL;
+    }
+
     if (!Widget_Init(&w->base, hInstance, &image_vtable, x, y, width, height, 0, click_through)) {
         if (w->image) GdipDisposeImage(w->image);
         free(w);
         return false;
     }
+
+    /* CRITICAL: Initial render for layered window */
+    Widget_Render(&w->base);
     return true;
 }

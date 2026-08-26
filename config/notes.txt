@@ -1,0 +1,9 @@
+Welcome to LiteWidgets!
+
+This is your notes widget.
+Edit this file and reload
+to see your changes.
+
+- Grocery list
+- Walk the dog
+- Finish project report
