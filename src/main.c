@@ -7,12 +7,16 @@
 #include "desktop.h"
 #include "widget.h"
 #include "config.h"
+#include "settings.h"
 
 typedef BOOL (WINAPI *pfnSetProcessDpiAwarenessContext)(DPI_AWARENESS_CONTEXT);
 
 #define WM_TRAYICON (WM_USER + 1)
+#define ID_TRAY_SETTINGS 2000
 #define ID_TRAY_RELOAD 2001
 #define ID_TRAY_EXIT 2002
+
+static char g_iniPath[MAX_PATH];
 
 static ULONG_PTR g_gdiplusToken = 0;
 static UINT g_TaskbarRestartMsg = 0;
@@ -51,6 +55,7 @@ static void RemoveTrayIcon(HWND hWnd) {
 
 static void ShowTrayMenu(HWND hWnd, POINT pt) {
     HMENU hMenu = CreatePopupMenu();
+    InsertMenuA(hMenu, -1, MF_BYPOSITION | MF_STRING, ID_TRAY_SETTINGS, "Settings...");
     InsertMenuA(hMenu, -1, MF_BYPOSITION | MF_STRING, ID_TRAY_RELOAD, "Reload Widgets");
     InsertMenuA(hMenu, -1, MF_BYPOSITION | MF_SEPARATOR, 0, NULL);
     InsertMenuA(hMenu, -1, MF_BYPOSITION | MF_STRING, ID_TRAY_EXIT, "Exit");
@@ -69,15 +74,19 @@ static LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM l
 
     switch (msg) {
         case WM_TRAYICON:
-            if (lParam == WM_RBUTTONUP || lParam == WM_LBUTTONUP) {
+            if (lParam == WM_RBUTTONUP) {
                 POINT pt;
                 GetCursorPos(&pt);
                 ShowTrayMenu(hWnd, pt);
+            } else if (lParam == WM_LBUTTONDBLCLK) {
+                Settings_Open(GetModuleHandle(NULL), g_iniPath);
             }
             break;
         case WM_COMMAND:
             if (LOWORD(wParam) == ID_TRAY_EXIT) {
                 PostQuitMessage(0);
+            } else if (LOWORD(wParam) == ID_TRAY_SETTINGS) {
+                Settings_Open(GetModuleHandle(NULL), g_iniPath);
             } else if (LOWORD(wParam) == ID_TRAY_RELOAD) {
                 char exePath[MAX_PATH];
                 GetModuleFileNameA(NULL, exePath, MAX_PATH);
@@ -147,9 +156,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     g_TaskbarRestartMsg = RegisterWindowMessageA("TaskbarCreated");
 
     /* 5. Load config and create widgets */
-    char iniPath[MAX_PATH];
-    ResolveIniPath(iniPath, MAX_PATH);
-    Config_Load(iniPath, hInstance);
+    ResolveIniPath(g_iniPath, MAX_PATH);
+    Config_Load(g_iniPath, hInstance);
 
     /* 6. Message loop */
     MSG msg;
