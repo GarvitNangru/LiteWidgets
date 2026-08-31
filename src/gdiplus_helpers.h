@@ -272,4 +272,28 @@ GpStatus WINGDIPAPI GdipSaveImageToFile(GpImage *image, const WCHAR *filename,
 GpStatus WINGDIPAPI GdipGetImageWidth(GpImage *image, UINT *width);
 GpStatus WINGDIPAPI GdipGetImageHeight(GpImage *image, UINT *height);
 
+/* ========== Direct pixel access ========== */
+
+typedef struct {
+    UINT   Width;
+    UINT   Height;
+    INT    Stride;
+    INT    PixelFormat;
+    void*  Scan0;
+    UINT_PTR Reserved;
+} GpBitmapData;
+
+#define ImageLockModeRead      0x0001
+#define ImageLockModeWrite     0x0002
+#define ImageLockModeUserInput 0x0004
+
+/*
+ * Locking with PixelFormat32bppARGB converts on the way out, which is the
+ * cheapest way to get straight (non-premultiplied) alpha out of a surface
+ * that was composited premultiplied.
+ */
+GpStatus WINGDIPAPI GdipBitmapLockBits(GpBitmap *bitmap, const GpRect *rect, UINT flags,
+                                       INT format, GpBitmapData *lockedBitmapData);
+GpStatus WINGDIPAPI GdipBitmapUnlockBits(GpBitmap *bitmap, GpBitmapData *lockedBitmapData);
+
 #endif /* GDIP_HELPERS_H */

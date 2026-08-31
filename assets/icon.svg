@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="LiteWidgets">
+  <title>LiteWidgets</title>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7BDCFF"/>
+      <stop offset="1" stop-color="#2D6BF0"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.34"/>
+      <stop offset="0.55" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded tile: a widget panel, the shape every widget in the app draws. -->
+  <rect x="18" y="18" width="220" height="220" rx="54" fill="url(#tile)"/>
+  <rect x="18" y="18" width="220" height="220" rx="54" fill="url(#sheen)"/>
+  <rect x="19.5" y="19.5" width="217" height="217" rx="52.5"
+        fill="none" stroke="#FFFFFF" stroke-opacity="0.45" stroke-width="3"/>
+
+  <!-- Two hands at 12 and 3: the mark stays legible down to 16px. -->
+  <g stroke="#0B1A33" stroke-linecap="round" fill="none">
+    <path d="M128 128 V 62" stroke-width="20"/>
+    <path d="M128 128 H 184" stroke-width="20"/>
+  </g>
+</svg>

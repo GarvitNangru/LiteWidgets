@@ -44,7 +44,22 @@ if not exist bin mkdir bin
 if not exist bin\obj mkdir bin\obj
 if not exist bin\obj-tools mkdir bin\obj-tools
 
+:: The application icon is drawn from source rather than checked in, so the
+:: repository stays free of binary assets. It has to exist before rc runs.
+cl.exe /nologo /W4 /std:c17 /O2 /MT /nologo /D_CRT_SECURE_NO_WARNINGS /I src ^
+    /Fe"bin\mkicon.exe" /Fo"bin\obj-tools\\" tools\mkicon.c ^
+    /link /OPT:REF gdiplus.lib user32.lib >nul
+if errorlevel 1 (
+    echo [build] could not build tools\mkicon.c
+    exit /b 1
+)
+bin\mkicon.exe bin\app.ico >nul
+if errorlevel 1 exit /b 1
+
 rc.exe /nologo /fo bin\app.res app.manifest.rc
+if errorlevel 1 exit /b 1
+
+rc.exe /nologo /i bin /i src /fo bin\icon.res app.icon.rc
 if errorlevel 1 exit /b 1
 
 if /i "%CONFIG%"=="debug" (
@@ -60,7 +75,7 @@ set "CORE=src\config.c src\spec.c src\desktop.c src\style.c src\drawing.c src\la
 cl.exe /nologo /W4 /std:c17 !CFLAGS! /D_CRT_SECURE_NO_WARNINGS /I src ^
     /Fe"bin\LiteWidgets.exe" /Fo"bin\obj\\" /Fd"bin\LiteWidgets.pdb" ^
     src\main.c src\autostart.c src\settings.c %CORE% ^
-    bin\app.res ^
+    bin\app.res bin\icon.res ^
     /link !LDFLAGS! user32.lib gdi32.lib gdiplus.lib shell32.lib shcore.lib ^
     advapi32.lib shlwapi.lib comdlg32.lib comctl32.lib msimg32.lib
 

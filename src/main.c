@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "autostart.h"
+#include "resource.h"
 #include "config.h"
 #include "desktop.h"
 #include "settings.h"
@@ -96,56 +97,13 @@ static void ParseCommandLine(char* iniPath, DWORD cap, bool* openSettings) {
 }
 
 /*
- * Build the tray icon at runtime instead of shipping a binary .ico: a rounded
- * badge with two clock hands, drawn at the system's small-icon size.
+ * The icon is a real multi-resolution resource, generated from
+ * tools/mkicon.c at build time. Asking for the exact small-icon metric keeps
+ * the tray crisp instead of letting the shell rescale the 32px frame.
  */
-static HICON CreateTrayIcon(void) {
-    int size = GetSystemMetrics(SM_CXSMICON);
-    if (size < 16) size = 16;
-
-    GpBitmap* bitmap = NULL;
-    if (GdipCreateBitmapFromScan0(size, size, 0, PixelFormat32bppPARGB, NULL, &bitmap) != 0)
-        return NULL;
-
-    GpGraphics* gfx = NULL;
-    if (GdipGetImageGraphicsContext((GpImage*)bitmap, &gfx) == 0 && gfx) {
-        GdipSetSmoothingMode(gfx, SmoothingModeAntiAlias);
-
-        float s = (float)size;
-        GpSolidFill* brush = NULL;
-        if (GdipCreateSolidFill(0xFF4CC2FF, &brush) == 0) {
-            GdipFillEllipse(gfx, (GpBrush*)brush, 0.5f, 0.5f, s - 1.0f, s - 1.0f);
-            GdipDeleteBrush((GpBrush*)brush);
-        }
-
-        GpPen* pen = NULL;
-        if (GdipCreatePen1(0xFF0A1A24, (s > 20.0f) ? 2.0f : 1.5f, UnitPixel, &pen) == 0) {
-            GdipSetPenStartCap(pen, LineCapRound);
-            GdipSetPenEndCap(pen, LineCapRound);
-            float c = s * 0.5f;
-            GdipDrawLine(gfx, pen, c, c, c, c - s * 0.28f);          /* minute hand */
-            GdipDrawLine(gfx, pen, c, c, c + s * 0.20f, c);          /* hour hand */
-            GdipDeletePen(pen);
-        }
-        GdipDeleteGraphics(gfx);
-    }
-
-    HICON icon = NULL;
-    HBITMAP color = NULL;
-    if (GdipCreateHBITMAPFromBitmap(bitmap, &color, 0) == 0 && color) {
-        HBITMAP mask = CreateBitmap(size, size, 1, 1, NULL);
-        ICONINFO info;
-        info.fIcon = TRUE;
-        info.xHotspot = 0;
-        info.yHotspot = 0;
-        info.hbmMask = mask;
-        info.hbmColor = color;
-        icon = CreateIconIndirect(&info);
-        if (mask) DeleteObject(mask);
-        DeleteObject(color);
-    }
-    GdipDisposeImage((GpImage*)bitmap);
-
+static HICON LoadAppIcon(int size) {
+    HICON icon = (HICON)LoadImageA(GetModuleHandleA(NULL), MAKEINTRESOURCEA(IDI_APP),
+                                   IMAGE_ICON, size, size, LR_DEFAULTCOLOR);
     return icon ? icon : LoadIcon(NULL, IDI_APPLICATION);
 }
 
@@ -323,13 +281,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     ParseCommandLine(g_iniPath, MAX_PATH, &openSettings);
     Config_WriteDefault(g_iniPath);   /* no-op when the file already exists */
 
-    g_trayIcon = CreateTrayIcon();
+    int trayIconSize = GetSystemMetrics(SM_CXSMICON);
+    g_trayIcon = LoadAppIcon(trayIconSize > 0 ? trayIconSize : 16);
 
     WNDCLASSA wc;
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc = MainWndProc;
     wc.hInstance = hInstance;
     wc.lpszClassName = "LiteWidgetsMainClass";
+    wc.hIcon = LoadAppIcon(GetSystemMetrics(SM_CXICON));
     RegisterClassA(&wc);
 
     /*
