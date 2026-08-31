@@ -7,11 +7,14 @@ setlocal enabledelayedexpansion
 ::
 ::   build.bat            release build
 ::   build.bat debug      debug build with symbols
+::   build.bat tools      also build bin\render.exe, the offscreen renderer
 :: ---------------------------------------------------------------------------
 
 set "CONFIG=release"
+set "TOOLS="
 for %%a in (%*) do (
     if /i "%%a"=="debug" set "CONFIG=debug"
+    if /i "%%a"=="tools" set "TOOLS=1"
 )
 
 if defined VCToolsInstallDir goto :have_env
@@ -39,6 +42,7 @@ if errorlevel 1 (
 :have_env
 if not exist bin mkdir bin
 if not exist bin\obj mkdir bin\obj
+if not exist bin\obj-tools mkdir bin\obj-tools
 
 rc.exe /nologo /fo bin\app.res app.manifest.rc
 if errorlevel 1 exit /b 1
@@ -66,4 +70,29 @@ if errorlevel 1 (
 )
 echo [build] bin\LiteWidgets.exe ^(%CONFIG%^)
 
+if not defined TOOLS goto :done
+
+cl.exe /nologo /W4 /std:c17 !CFLAGS! /D_CRT_SECURE_NO_WARNINGS /I src ^
+    /Fe"bin\render.exe" /Fo"bin\obj-tools\\" /Fd"bin\render.pdb" ^
+    tools\render.c %CORE% ^
+    /link !LDFLAGS! user32.lib gdi32.lib gdiplus.lib shlwapi.lib
+
+if errorlevel 1 (
+    echo [build] tools FAILED
+    exit /b 1
+)
+echo [build] bin\render.exe
+
+cl.exe /nologo /W4 /std:c17 !CFLAGS! /D_CRT_SECURE_NO_WARNINGS /I src ^
+    /Fe"bin\docgen.exe" /Fo"bin\obj-tools\\" /Fd"bin\docgen.pdb" ^
+    tools\docgen.c src\spec.c src\style.c src\layout.c ^
+    /link !LDFLAGS! user32.lib
+
+if errorlevel 1 (
+    echo [build] tools FAILED
+    exit /b 1
+)
+echo [build] bin\docgen.exe
+
+:done
 endlocal
