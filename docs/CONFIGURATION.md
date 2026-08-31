@@ -47,6 +47,7 @@ means "off" for effects such as shadow, glow and outline.
 | `height` | all | integer | `140` | Widget height in pixels |
 | `opacity` | all | number | `1.0` | Master transparency, 0.0 to 1.0 |
 | `click_through` | all | true / false | `true` | Let clicks pass to the desktop underneath |
+| `z_order` | all | `desktop`, `bottom`, `top` | `desktop` | desktop follows the wallpaper, bottom pins to the very back, top floats above all windows |
 
 ## Panel
 

@@ -34,6 +34,15 @@ typedef enum { CLOCK_DIGITAL = 0, CLOCK_ANALOG } ClockMode;
 /* How an image fills its box. */
 typedef enum { FIT_CONTAIN = 0, FIT_COVER, FIT_STRETCH } ImageFit;
 
+/*
+ * Where a widget sits in the window stack.
+ *
+ * ZORDER_DESKTOP tracks the wallpaper rather than pinning to the very
+ * bottom, because a live wallpaper draws into its own window and would
+ * otherwise cover the widget.
+ */
+typedef enum { ZORDER_DESKTOP = 0, ZORDER_BOTTOM, ZORDER_TOP } ZOrder;
+
 typedef struct {
     int   mode;                 /* ClockMode */
 
@@ -86,6 +95,7 @@ typedef struct {
     int         width, height;
     int         anchor;         /* Anchor */
     int         monitor;        /* -1 = primary */
+    int         z_order;        /* ZOrder */
     bool        click_through;
     float       opacity;        /* 0..1, multiplies every alpha channel */
 

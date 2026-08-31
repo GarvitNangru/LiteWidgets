@@ -1,5 +1,6 @@
 #include "widget.h"
 
+#include "desktop.h"
 #include "drawing.h"
 #include "layout.h"
 
@@ -35,6 +36,58 @@ int  Widget_SnapGrid(void) { return g_snapGrid; }
 
 void Widget_SetSnapGrid(int pixels) {
     g_snapGrid = (pixels < 1) ? 1 : pixels;
+}
+
+/* ─────────────────────────── z-order ─────────────────────────── */
+
+#define ZFLAGS (SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+
+/*
+ * Park a widget where its z_order asks for.
+ *
+ * The interesting case is ZORDER_DESKTOP. HWND_BOTTOM is not good enough:
+ * a live wallpaper renders into its own window, which does not necessarily
+ * stay at the bottom, so a widget pinned to the very bottom disappears
+ * behind the wallpaper. Sitting immediately above whatever is painting the
+ * desktop keeps the widget visible while still leaving it behind every
+ * normal application window.
+ */
+static void PlaceWidget(Widget* w) {
+    if (!w || !w->hwnd) return;
+
+    if (w->z_order == ZORDER_TOP) {
+        SetWindowPos(w->hwnd, HWND_TOPMOST, 0, 0, 0, 0, ZFLAGS);
+        return;
+    }
+    if (w->z_order == ZORDER_BOTTOM) {
+        SetWindowPos(w->hwnd, HWND_BOTTOM, 0, 0, 0, 0, ZFLAGS);
+        return;
+    }
+
+    HWND wallpaper = DesktopHost_FindWallpaper();
+    if (!wallpaper) {
+        SetWindowPos(w->hwnd, HWND_BOTTOM, 0, 0, 0, 0, ZFLAGS);
+        return;
+    }
+
+    /* Insert after the wallpaper's neighbour, which lands us just above it. */
+    HWND above = GetWindow(wallpaper, GW_HWNDPREV);
+    if (above == w->hwnd) return;               /* already in place */
+    SetWindowPos(w->hwnd, above ? above : HWND_TOP, 0, 0, 0, 0, ZFLAGS);
+}
+
+void Widget_ReassertZOrder(void) {
+    if (g_editMode) return;   /* edit mode deliberately floats the widgets */
+
+    HWND wallpaper = DesktopHost_FindWallpaper();
+    if (!wallpaper) return;
+
+    for (int i = 0; i < g_trackedCount; i++) {
+        Widget* w = g_tracked[i];
+        if (!w || !w->hwnd || w->z_order != ZORDER_DESKTOP) continue;
+        /* Only rescue the ones that actually fell behind. */
+        if (DesktopHost_IsBehind(w->hwnd, wallpaper)) PlaceWidget(w);
+    }
 }
 
 /* ─────────────────────────── timers ─────────────────────────── */
@@ -170,6 +223,7 @@ bool Widget_Init(Widget* w, HINSTANCE hInstance, const WidgetVtable* vt,
     w->height        = spec->height;
     w->anchor        = spec->anchor;
     w->monitor       = spec->monitor;
+    w->z_order       = spec->z_order;
     w->radius        = spec->style.corner_radius;
     w->click_through = spec->click_through;
     w->click_through_saved = spec->click_through;
@@ -183,14 +237,21 @@ bool Widget_Init(Widget* w, HINSTANCE hInstance, const WidgetVtable* vt,
     DWORD exStyle = WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
     if (spec->click_through) exStyle |= WS_EX_TRANSPARENT;
 
-    /* No owner window: giving one to WorkerW makes Wallpaper Engine reload. */
+    /*
+     * Owned by the desktop, so "show desktop" carries the widget up with the
+     * desktop band instead of stranding it behind the wallpaper. A widget
+     * asking to float above everything gets no owner, since ownership would
+     * pin it to the desktop's band.
+     */
+    HWND owner = (spec->z_order == ZORDER_TOP) ? NULL : DesktopHost_GetOwner();
+
     w->hwnd = CreateWindowExA(exStyle, "LiteWidgetClass", "LiteWidget",
                               WS_POPUP | WS_VISIBLE,
                               pos.x, pos.y, spec->width, spec->height,
-                              NULL, NULL, hInstance, w);
+                              owner, NULL, hInstance, w);
     if (!w->hwnd) return false;
 
-    SetWindowPos(w->hwnd, HWND_BOTTOM, pos.x, pos.y, spec->width, spec->height, SWP_NOACTIVATE);
+    PlaceWidget(w);
     ArmTimer(w);
     Track(w);
     return true;
@@ -307,10 +368,8 @@ void Widget_SetEditMode(bool enable) {
                          SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         } else {
             Widget_SetClickThrough(w, w->click_through_saved);
-            SetWindowPos(w->hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
-                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-            SetWindowPos(w->hwnd, HWND_BOTTOM, 0, 0, 0, 0,
-                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            SetWindowPos(w->hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, ZFLAGS);
+            PlaceWidget(w);
         }
         Widget_Render(w);
     }

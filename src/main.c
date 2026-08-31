@@ -25,12 +25,13 @@ typedef BOOL (WINAPI *SetProcessDpiAwarenessContextFn)(DPI_AWARENESS_CONTEXT);
 #define APP_MUTEX   "LiteWidgets.SingleInstance"
 #define APP_WAKEUP  "LiteWidgets.Reload"
 
-static char      g_iniPath[MAX_PATH];
-static ULONG_PTR g_gdiplusToken = 0;
-static UINT      g_taskbarCreatedMsg = 0;
-static UINT      g_reloadMsg = 0;
-static HWND      g_mainWnd = NULL;
-static HICON     g_trayIcon = NULL;
+static char          g_iniPath[MAX_PATH];
+static ULONG_PTR     g_gdiplusToken = 0;
+static UINT          g_taskbarCreatedMsg = 0;
+static UINT          g_reloadMsg = 0;
+static HWND          g_mainWnd = NULL;
+static HICON         g_trayIcon = NULL;
+static HWINEVENTHOOK g_foregroundHook = NULL;
 
 /* ─────────────────────────── startup plumbing ─────────────────────────── */
 
@@ -216,12 +217,36 @@ static void ToggleEditMode(HWND hWnd) {
     (void)hWnd;
 }
 
+/*
+ * Showing the desktop reshuffles the desktop band, and a live wallpaper that
+ * renders into its own window can end up on top of the widgets — where it
+ * stays, because nothing moves them back.
+ *
+ * Focus changes are the signal we need: Win+D, the show-desktop corner and
+ * Aero Peek all move the foreground to the desktop. An out-of-context
+ * WinEvent hook delivers those on our own message loop, so the widgets can
+ * be rescued without polling anything.
+ */
+static void CALLBACK OnForegroundChanged(HWINEVENTHOOK hook, DWORD event, HWND window,
+                                         LONG object, LONG child,
+                                         DWORD thread, DWORD timestamp) {
+    (void)hook; (void)event; (void)window; (void)object;
+    (void)child; (void)thread; (void)timestamp;
+    Widget_ReassertZOrder();
+}
+
 /* ─────────────────────────── window procedure ─────────────────────────── */
 
 static LRESULT CALLBACK MainWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (msg == g_taskbarCreatedMsg) {
-        AddTrayIcon(hWnd);        /* Explorer restarted; re-add our icon */
+        /*
+         * Explorer restarted: the tray icon is gone, and so is the Progman
+         * that owns the widgets — Windows destroys owned windows with their
+         * owner — so they have to be rebuilt against the new desktop.
+         */
+        AddTrayIcon(hWnd);
         DesktopHost_Reattach();
+        Config_Reload(g_iniPath, GetModuleHandle(NULL));
         return 0;
     }
     if (msg == g_reloadMsg) {
@@ -307,8 +332,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     wc.lpszClassName = "LiteWidgetsMainClass";
     RegisterClassA(&wc);
 
-    g_mainWnd = CreateWindowExA(0, "LiteWidgetsMainClass", "LiteWidgets", 0,
-                                0, 0, 0, 0, HWND_MESSAGE, NULL, hInstance, NULL);
+    /*
+     * A hidden top-level window rather than a message-only one: message-only
+     * windows never receive broadcasts, which silently costs us
+     * "TaskbarCreated", WM_DISPLAYCHANGE, WM_SETTINGCHANGE and the shell
+     * hook. WS_EX_TOOLWINDOW keeps it out of Alt+Tab and the taskbar.
+     */
+    g_mainWnd = CreateWindowExA(WS_EX_TOOLWINDOW, "LiteWidgetsMainClass", "LiteWidgets",
+                                WS_POPUP, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
     if (!g_mainWnd) {
         GdiplusShutdown(g_gdiplusToken);
         return 1;
@@ -316,6 +347,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     g_taskbarCreatedMsg = RegisterWindowMessageA("TaskbarCreated");
     AddTrayIcon(g_mainWnd);
+
+    g_foregroundHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
+                                       NULL, OnForegroundChanged, 0, 0,
+                                       WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
 
     DesktopHost_Init();
     Config_Load(g_iniPath, hInstance);
@@ -327,6 +362,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         DispatchMessageA(&msg);
     }
 
+    if (g_foregroundHook) UnhookWinEvent(g_foregroundHook);
     if (g_trayIcon) DestroyIcon(g_trayIcon);
     GdiplusShutdown(g_gdiplusToken);
     if (instanceMutex) {

@@ -40,6 +40,7 @@ void Spec_Defaults(WidgetSpec* spec) {
     spec->height        = 140;
     spec->anchor        = ANCHOR_TOP_LEFT;
     spec->monitor       = -1;
+    spec->z_order       = ZORDER_DESKTOP;
     spec->click_through = true;
     spec->opacity       = 1.0f;
     spec->show_seconds  = false;
@@ -120,6 +121,12 @@ bool Spec_Set(WidgetSpec* spec, const char* key, const char* value) {
     if (KEY("height"))  { spec->height = atoi(value); return true; }
     if (KEY("anchor"))  { spec->anchor = Layout_ParseAnchor(value); return true; }
     if (KEY("monitor")) { spec->monitor = atoi(value); return true; }
+    if (KEY("z_order")) {
+        if      (_stricmp(value, "top")    == 0) spec->z_order = ZORDER_TOP;
+        else if (_stricmp(value, "bottom") == 0) spec->z_order = ZORDER_BOTTOM;
+        else                                     spec->z_order = ZORDER_DESKTOP;
+        return true;
+    }
     if (KEY("click_through")) { spec->click_through = Style_ParseBool(value, true); return true; }
     if (KEY("opacity")) {
         float v = (float)atof(value);
@@ -249,6 +256,7 @@ static const PropDef g_props[] = {
 {"height",             "Height",            PK_INT,   PG_LAYOUT,  TYPE_ANY,   NULL,                                       "140",         "Widget height in pixels"},
 {"opacity",            "Opacity",           PK_FLOAT, PG_LAYOUT,  TYPE_ANY,   NULL,                                       "1.0",         "Master transparency, 0.0 to 1.0"},
 {"click_through",      "Click-through",     PK_BOOL,  PG_LAYOUT,  TYPE_ANY,   NULL,                                       "true",        "Let clicks pass to the desktop underneath"},
+{"z_order",            "Layer",             PK_ENUM,  PG_LAYOUT,  TYPE_ANY,   "desktop|bottom|top",                       "desktop",     "desktop follows the wallpaper, bottom pins to the very back, top floats above all windows"},
 
 {"bg_color",           "Background",        PK_COLOR, PG_SURFACE, TYPE_ANY,   NULL,                                       "D9181825",    "Panel fill, AARRGGBB"},
 {"bg_color2",          "Background 2",      PK_COLOR, PG_SURFACE, TYPE_ANY,   NULL,                                       "00000000",    "Gradient end colour for the panel"},

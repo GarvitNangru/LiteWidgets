@@ -55,11 +55,11 @@ if /i "%CONFIG%"=="debug" (
     set "LDFLAGS=/LTCG /OPT:REF /OPT:ICF"
 )
 
-set "CORE=src\config.c src\spec.c src\style.c src\drawing.c src\layout.c src\timefmt.c src\widget.c src\widgets\clock.c src\widgets\image.c src\widgets\notes.c"
+set "CORE=src\config.c src\spec.c src\desktop.c src\style.c src\drawing.c src\layout.c src\timefmt.c src\widget.c src\widgets\clock.c src\widgets\image.c src\widgets\notes.c"
 
 cl.exe /nologo /W4 /std:c17 !CFLAGS! /D_CRT_SECURE_NO_WARNINGS /I src ^
     /Fe"bin\LiteWidgets.exe" /Fo"bin\obj\\" /Fd"bin\LiteWidgets.pdb" ^
-    src\main.c src\desktop.c src\autostart.c src\settings.c %CORE% ^
+    src\main.c src\autostart.c src\settings.c %CORE% ^
     bin\app.res ^
     /link !LDFLAGS! user32.lib gdi32.lib gdiplus.lib shell32.lib shcore.lib ^
     advapi32.lib shlwapi.lib comdlg32.lib comctl32.lib msimg32.lib

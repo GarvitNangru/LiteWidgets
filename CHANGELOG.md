@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Widgets vanished behind the wallpaper when the desktop was shown, and never
+  came back. They were unowned top-level windows parked at `HWND_BOTTOM`, so
+  "show desktop" raised the desktop band over them permanently. They are now
+  owned by the desktop window, which carries them up with it while still
+  leaving them behind every ordinary window. Nothing is sent to Progman, so
+  Wallpaper Engine still does not reload.
+- The main window was message-only, which silently discarded every broadcast
+  message the app relies on: the tray icon was never restored after Explorer
+  restarted, widgets did not reposition on a resolution change, and the clock
+  did not pick up a locale change. It is now a hidden top-level window.
+- Widgets buried behind a live wallpaper that raises its own render window
+  now recover on the next focus change, rather than staying hidden until the
+  app is restarted.
+
 ### Added
 
 **Styling**
@@ -35,6 +51,8 @@ All notable changes to this project are documented here. The format follows
   survive resolution changes.
 - `monitor` selects a display by index.
 - Widgets reposition themselves on `WM_DISPLAYCHANGE`.
+- `z_order` chooses the layer a widget lives on: `desktop` tracks the
+  wallpaper, `bottom` pins to the very back, `top` floats above all windows.
 
 **Settings editor**
 

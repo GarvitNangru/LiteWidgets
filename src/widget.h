@@ -30,6 +30,7 @@ typedef struct Widget {
     int   width, height;
     int   anchor;
     int   monitor;
+    int   z_order;               /* ZOrder */
     float radius;                /* corner radius, for the edit-mode overlay */
 
     UINT  timer_interval_ms;     /* 0 = no timer */
@@ -59,6 +60,16 @@ int  Widget_Count(void);
 
 /* Force a repaint of everything, e.g. after a display change. */
 void Widget_RenderAll(void);
+
+/*
+ * Put every widget back where it belongs in the z-order.
+ *
+ * Only widgets that have actually fallen behind the wallpaper are touched,
+ * so this is safe to call on every shell activation: showing the desktop
+ * reshuffles the desktop band, and without this a widget stays buried behind
+ * a live wallpaper until the app is restarted.
+ */
+void Widget_ReassertZOrder(void);
 
 /*
  * Edit mode: widgets become draggable, gain a visible outline and float above
