@@ -1,156 +1,221 @@
 #include "config.h"
+
+#include "widget.h"
 #include "widgets/clock.h"
 #include "widgets/image.h"
 #include "widgets/notes.h"
+
+#include <shlwapi.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-DWORD Config_ParseColor(const char* hexStr) {
-    if (!hexStr || !hexStr[0]) return 0xFF000000;
-    /* Skip leading # if present */
-    if (hexStr[0] == '#') hexStr++;
-    size_t len = strlen(hexStr);
-    DWORD val = strtoul(hexStr, NULL, 16);
-    /* If 6 chars (RRGGBB), assume fully opaque */
-    if (len <= 6) {
-        val |= 0xFF000000;
+/* Sections can hold a lot of keys; one buffer is reused for each. */
+#define SECTION_BUF 8192
+
+void Config_ResolvePath(const char* iniPath, const char* relative, WCHAR* out, DWORD cap) {
+    if (!out || cap == 0) return;
+    out[0] = L'\0';
+    if (!relative || !relative[0]) return;
+
+    WCHAR wide[MAX_PATH];
+    MultiByteToWideChar(CP_UTF8, 0, relative, -1, wide, MAX_PATH);
+
+    if (!PathIsRelativeW(wide)) {
+        wcsncpy(out, wide, cap - 1);
+        out[cap - 1] = L'\0';
+        return;
     }
-    return val;
+
+    WCHAR folder[MAX_PATH];
+    MultiByteToWideChar(CP_UTF8, 0, iniPath ? iniPath : "", -1, folder, MAX_PATH);
+    PathRemoveFileSpecW(folder);
+    PathCombineW(out, folder, wide);
 }
 
-static INT ParseFontStyle(const char* str) {
-    if (!str || !str[0]) return FontStyleRegular;
-    if (_stricmp(str, "bold") == 0) return FontStyleBold;
-    if (_stricmp(str, "italic") == 0) return FontStyleItalic;
-    if (_stricmp(str, "bold_italic") == 0) return FontStyleBoldItalic;
-    return FontStyleRegular;
+/* ─────────────────────────── reading ─────────────────────────── */
+
+/*
+ * Walk a `key=value\0key=value\0\0` block, handing every pair to `apply`.
+ * `presetPass` runs first so an explicit key always beats the preset it came
+ * bundled with, regardless of where it sits in the file.
+ */
+static void ApplyPairs(WidgetSpec* spec, const char* block, bool presetPass) {
+    for (const char* entry = block; *entry; entry += strlen(entry) + 1) {
+        const char* eq = strchr(entry, '=');
+        if (!eq || eq == entry) continue;
+
+        char key[64];
+        size_t keyLen = (size_t)(eq - entry);
+        if (keyLen >= sizeof(key)) keyLen = sizeof(key) - 1;
+        memcpy(key, entry, keyLen);
+        key[keyLen] = '\0';
+
+        /* Trim trailing spaces left by hand-edited files. */
+        while (keyLen > 0 && (key[keyLen - 1] == ' ' || key[keyLen - 1] == '\t'))
+            key[--keyLen] = '\0';
+
+        const char* value = eq + 1;
+        while (*value == ' ' || *value == '\t') value++;
+
+        bool isPreset = (_stricmp(key, "preset") == 0);
+        if (isPreset != presetPass) continue;
+
+        Spec_Set(spec, key, value);
+    }
 }
 
-static int ParseAlignment(const char* str) {
-    if (!str || !str[0]) return -1; /* Use default */
-    if (_stricmp(str, "left") == 0 || _stricmp(str, "top") == 0) return 0;
-    if (_stricmp(str, "center") == 0) return 1;
-    if (_stricmp(str, "right") == 0 || _stricmp(str, "bottom") == 0) return 2;
-    return -1;
-}
+bool Config_ReadSpec(const char* iniPath, const char* section, WidgetSpec* out) {
+    if (!iniPath || !section || !out) return false;
 
-void Config_ParseStyle(const char* iniPath, const char* section, WidgetStyle* out) {
-    *out = Style_Default();
-    char buf[128];
-
-    /* Background */
-    GetPrivateProfileStringA(section, "bg_color", "", buf, sizeof(buf), iniPath);
-    if (buf[0]) out->bg_color = Config_ParseColor(buf);
-
-    /* Text */
-    GetPrivateProfileStringA(section, "text_color", "", buf, sizeof(buf), iniPath);
-    if (buf[0]) out->text_color = Config_ParseColor(buf);
-
-    /* Border */
-    GetPrivateProfileStringA(section, "border_color", "", buf, sizeof(buf), iniPath);
-    if (buf[0]) out->border_color = Config_ParseColor(buf);
-
-    GetPrivateProfileStringA(section, "border_width", "", buf, sizeof(buf), iniPath);
-    if (buf[0]) out->border_width = (float)atof(buf);
-
-    /* Corner radius */
-    GetPrivateProfileStringA(section, "corner_radius", "", buf, sizeof(buf), iniPath);
-    if (buf[0]) out->corner_radius = (float)atof(buf);
-
-    /* Font */
-    GetPrivateProfileStringA(section, "font_family", "", buf, sizeof(buf), iniPath);
-    if (buf[0]) MultiByteToWideChar(CP_UTF8, 0, buf, -1, out->font_family, 64);
-
-    GetPrivateProfileStringA(section, "font_size", "", buf, sizeof(buf), iniPath);
-    if (buf[0]) out->font_size = (float)atof(buf);
-
-    GetPrivateProfileStringA(section, "font_style", "", buf, sizeof(buf), iniPath);
-    if (buf[0]) out->font_style = ParseFontStyle(buf);
-
-    /* Alignment */
-    GetPrivateProfileStringA(section, "align_h", "", buf, sizeof(buf), iniPath);
-    int ah = ParseAlignment(buf);
-    if (ah >= 0) out->align_h = ah;
-
-    GetPrivateProfileStringA(section, "align_v", "", buf, sizeof(buf), iniPath);
-    int av = ParseAlignment(buf);
-    if (av >= 0) out->align_v = av;
-
-    /* Padding */
-    GetPrivateProfileStringA(section, "padding", "", buf, sizeof(buf), iniPath);
-    if (buf[0]) out->padding = (float)atof(buf);
-}
-
-static void CreateWidgetFromSection(const char* iniPath, const char* section, HINSTANCE hInstance) {
-    char type[32] = {0};
+    char type[32] = { 0 };
     GetPrivateProfileStringA(section, "type", "", type, sizeof(type), iniPath);
-    if (!type[0]) return;
+    if (!type[0]) return false;
 
-    int x      = GetPrivateProfileIntA(section, "x", 0, iniPath);
-    int y      = GetPrivateProfileIntA(section, "y", 0, iniPath);
-    int width  = GetPrivateProfileIntA(section, "width", 200, iniPath);
-    int height = GetPrivateProfileIntA(section, "height", 100, iniPath);
+    char* block = (char*)calloc(SECTION_BUF, 1);
+    if (!block) return false;
+    GetPrivateProfileSectionA(section, block, SECTION_BUF, iniPath);
 
-    char clickStr[16] = {0};
-    GetPrivateProfileStringA(section, "click_through", "true", clickStr, sizeof(clickStr), iniPath);
-    bool click_through = (_stricmp(clickStr, "true") == 0 || _stricmp(clickStr, "1") == 0);
+    Spec_Defaults(out);
+    strncpy(out->section, section, LW_SECTION_LEN - 1);
+    out->section[LW_SECTION_LEN - 1] = '\0';
 
-    /* Parse shared style */
-    WidgetStyle style;
-    Config_ParseStyle(iniPath, section, &style);
+    ApplyPairs(out, block, true);    /* presets first */
+    ApplyPairs(out, block, false);   /* then explicit keys */
+    Spec_Finalize(out);
 
-    if (_stricmp(type, "clock") == 0) {
-        char format[16] = {0};
-        GetPrivateProfileStringA(section, "format", "12h", format, sizeof(format), iniPath);
+    free(block);
+    return true;
+}
 
-        char secStr[16] = {0};
-        GetPrivateProfileStringA(section, "show_seconds", "false", secStr, sizeof(secStr), iniPath);
-        bool show_seconds = (_stricmp(secStr, "true") == 0 || _stricmp(secStr, "1") == 0);
+int Config_ReadAll(const char* iniPath, WidgetSpec* out, int maxCount) {
+    if (!iniPath || !out || maxCount <= 0) return 0;
 
-        char dateStr[16] = {0};
-        GetPrivateProfileStringA(section, "show_date", "true", dateStr, sizeof(dateStr), iniPath);
-        bool show_date = (_stricmp(dateStr, "true") == 0 || _stricmp(dateStr, "1") == 0);
+    char* names = (char*)calloc(SECTION_BUF, 1);
+    if (!names) return 0;
+    GetPrivateProfileSectionNamesA(names, SECTION_BUF, iniPath);
 
-        /* Date-specific styling (falls back to main style if not set) */
-        char buf[128];
-        float date_font_size = style.font_size * 0.4f; /* Default: 40% of time font */
-        GetPrivateProfileStringA(section, "date_font_size", "", buf, sizeof(buf), iniPath);
-        if (buf[0]) date_font_size = (float)atof(buf);
+    int count = 0;
+    for (char* p = names; *p && count < maxCount; p += strlen(p) + 1)
+        if (Config_ReadSpec(iniPath, p, &out[count])) count++;
 
-        INT date_font_style = FontStyleRegular;
-        GetPrivateProfileStringA(section, "date_font_style", "", buf, sizeof(buf), iniPath);
-        if (buf[0]) date_font_style = ParseFontStyle(buf);
+    free(names);
+    return count;
+}
 
-        ARGB date_color = (style.text_color & 0x00FFFFFF) | 0x99000000; /* Default: 60% opacity of text */
-        GetPrivateProfileStringA(section, "date_color", "", buf, sizeof(buf), iniPath);
-        if (buf[0]) date_color = Config_ParseColor(buf);
+/* ─────────────────────────── creating ─────────────────────────── */
 
-        ClockWidget_Create(hInstance, x, y, width, height, click_through,
-                           format, show_seconds, show_date, &style,
-                           date_font_size, date_font_style, date_color);
-    }
-    else if (_stricmp(type, "image") == 0) {
-        char pathA[MAX_PATH] = {0};
-        GetPrivateProfileStringA(section, "path", "", pathA, sizeof(pathA), iniPath);
-        ImageWidget_Create(hInstance, iniPath, x, y, width, height, click_through, pathA);
-    }
-    else if (_stricmp(type, "notes") == 0) {
-        char pathA[MAX_PATH] = {0};
-        GetPrivateProfileStringA(section, "path", "", pathA, sizeof(pathA), iniPath);
-        NotesWidget_Create(hInstance, iniPath, x, y, width, height, click_through, pathA, &style);
+static bool CreateWidget(const char* iniPath, const WidgetSpec* spec, HINSTANCE hInstance) {
+    switch (spec->type) {
+        case WIDGET_CLOCK: return ClockWidget_Create(hInstance, spec);
+        case WIDGET_NOTES: return NotesWidget_Create(hInstance, iniPath, spec);
+        case WIDGET_IMAGE: return ImageWidget_Create(hInstance, iniPath, spec);
+        default:           return false;
     }
 }
 
-void Config_Load(const char* iniPath, HINSTANCE hInstance) {
-    char sectionNames[4096] = {0};
-    DWORD chars = GetPrivateProfileSectionNamesA(sectionNames, sizeof(sectionNames), iniPath);
+int Config_Load(const char* iniPath, HINSTANCE hInstance) {
+    WidgetSpec* specs = (WidgetSpec*)calloc(LW_MAX_WIDGETS, sizeof(WidgetSpec));
+    if (!specs) return 0;
 
-    if (chars > 0) {
-        char* p = sectionNames;
-        while (*p != '\0') {
-            CreateWidgetFromSection(iniPath, p, hInstance);
-            p += strlen(p) + 1;
-        }
+    int found = Config_ReadAll(iniPath, specs, LW_MAX_WIDGETS);
+    int created = 0;
+    for (int i = 0; i < found; i++) {
+        if (!specs[i].enabled) continue;
+        if (CreateWidget(iniPath, &specs[i], hInstance)) created++;
     }
+
+    free(specs);
+    return created;
+}
+
+int Config_Reload(const char* iniPath, HINSTANCE hInstance) {
+    bool wasEditing = Widget_EditMode();
+
+    Widget_DestroyAll();
+    int created = Config_Load(iniPath, hInstance);
+
+    /* Rebuilt widgets start click-through; put them back into edit mode. */
+    if (wasEditing) {
+        Widget_SetEditMode(false);
+        Widget_SetEditMode(true);
+    }
+    return created;
+}
+
+/* ─────────────────────────── preview ─────────────────────────── */
+
+void Config_Paint(const WidgetSpec* spec, const char* iniPath,
+                  GpGraphics* gfx, int width, int height) {
+    if (!spec || !gfx || width <= 0 || height <= 0) return;
+
+    switch (spec->type) {
+        case WIDGET_CLOCK: {
+            SYSTEMTIME now;
+            GetLocalTime(&now);
+            Clock_Paint(spec, &now, gfx, width, height);
+            break;
+        }
+        case WIDGET_NOTES: {
+            WCHAR path[MAX_PATH];
+            Config_ResolvePath(iniPath, spec->path, path, MAX_PATH);
+            WCHAR* text = Notes_LoadText(path);
+            Notes_Paint(spec, text ? text : L"(no file selected)", gfx, width, height);
+            free(text);
+            break;
+        }
+        case WIDGET_IMAGE: {
+            WCHAR path[MAX_PATH];
+            Config_ResolvePath(iniPath, spec->path, path, MAX_PATH);
+            GpImage* image = Image_Load(path);
+            Image_Paint(spec, image, gfx, width, height);
+            if (image) GdipDisposeImage(image);
+            break;
+        }
+        default:
+            break;
+    }
+}
+
+/* ─────────────────────────── bootstrap ─────────────────────────── */
+
+static const char kDefaultConfig[] =
+    "; LiteWidgets configuration\r\n"
+    "; Full key reference: docs/CONFIGURATION.md\r\n"
+    "\r\n"
+    "[clock]\r\n"
+    "type=clock\r\n"
+    "preset=midnight\r\n"
+    "anchor=top_right\r\n"
+    "x=-60\r\n"
+    "y=60\r\n"
+    "width=340\r\n"
+    "height=150\r\n"
+    "font_size=64\r\n"
+    "format=12h\r\n"
+    "show_date=true\r\n"
+    "date_transform=upper\r\n"
+    "date_letter_spacing=2\r\n";
+
+bool Config_WriteDefault(const char* iniPath) {
+    if (!iniPath || !iniPath[0]) return false;
+    if (GetFileAttributesA(iniPath) != INVALID_FILE_ATTRIBUTES) return false;
+
+    char folder[MAX_PATH];
+    strncpy(folder, iniPath, MAX_PATH - 1);
+    folder[MAX_PATH - 1] = '\0';
+    char* slash = strrchr(folder, '\\');
+    if (slash) {
+        *slash = '\0';
+        CreateDirectoryA(folder, NULL);
+    }
+
+    HANDLE file = CreateFileA(iniPath, GENERIC_WRITE, 0, NULL, CREATE_NEW,
+                              FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) return false;
+
+    DWORD written = 0;
+    WriteFile(file, kDefaultConfig, (DWORD)(sizeof(kDefaultConfig) - 1), &written, NULL);
+    CloseHandle(file);
+    return true;
 }

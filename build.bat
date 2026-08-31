@@ -1,34 +1,69 @@
 @echo off
-setlocal
+setlocal enabledelayedexpansion
 
-:: Find Visual Studio installation
-for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath 2^>nul`) do set "VS_PATH=%%i"
+:: ---------------------------------------------------------------------------
+:: LiteWidgets build script (MSVC). Run it from any shell -- it locates and
+:: initialises the Visual Studio environment itself.
+::
+::   build.bat            release build
+::   build.bat debug      debug build with symbols
+:: ---------------------------------------------------------------------------
 
-if not defined VS_PATH (
-    set "VS_PATH=C:\Program Files\Microsoft Visual Studio\2022\Community"
+set "CONFIG=release"
+for %%a in (%*) do (
+    if /i "%%a"=="debug" set "CONFIG=debug"
 )
 
-if exist "%VS_PATH%\VC\Auxiliary\Build\vcvars64.bat" (
-    call "%VS_PATH%\VC\Auxiliary\Build\vcvars64.bat"
-) else (
-    echo Could not find vcvars64.bat
+if defined VCToolsInstallDir goto :have_env
+
+set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+if not exist "%VSWHERE%" set "VSWHERE=%ProgramFiles%\Microsoft Visual Studio\Installer\vswhere.exe"
+
+set "VS_PATH="
+if exist "%VSWHERE%" for /f "usebackq tokens=*" %%i in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VS_PATH=%%i"
+
+if not defined VS_PATH (
+    echo [build] Visual Studio with the C++ toolset was not found.
+    echo [build] Install "Desktop development with C++" and try again.
     exit /b 1
 )
 
+:: vcvars is noisy and, on some installs, shells out to a vswhere it expects
+:: on PATH; neither is our problem, so both streams go to nul.
+call "%VS_PATH%\VC\Auxiliary\Build\vcvars64.bat" >nul 2>nul
+if errorlevel 1 (
+    echo [build] Could not initialise the MSVC environment.
+    exit /b 1
+)
+
+:have_env
 if not exist bin mkdir bin
+if not exist bin\obj mkdir bin\obj
 
 rc.exe /nologo /fo bin\app.res app.manifest.rc
+if errorlevel 1 exit /b 1
 
-cl.exe /nologo /O2 /W3 /MT /D_CRT_SECURE_NO_WARNINGS /I src ^
-    /Fe"bin\LiteWidgets.exe" /Fo"bin\\" ^
-    src\main.c src\desktop.c src\widget.c src\config.c src\drawing.c src\settings.c ^
-    src\widgets\clock.c src\widgets\image.c src\widgets\notes.c ^
-    bin\app.res ^
-    /link user32.lib gdi32.lib gdiplus.lib shell32.lib shcore.lib advapi32.lib shlwapi.lib comdlg32.lib
-
-if %ERRORLEVEL% equ 0 (
-    echo Build successful.
+if /i "%CONFIG%"=="debug" (
+    set "CFLAGS=/Od /Zi /MTd /DDEBUG"
+    set "LDFLAGS=/DEBUG"
 ) else (
-    echo Build failed.
+    set "CFLAGS=/O2 /GL /MT /DNDEBUG"
+    set "LDFLAGS=/LTCG /OPT:REF /OPT:ICF"
 )
+
+set "CORE=src\config.c src\spec.c src\style.c src\drawing.c src\layout.c src\timefmt.c src\widget.c src\widgets\clock.c src\widgets\image.c src\widgets\notes.c"
+
+cl.exe /nologo /W4 /std:c17 !CFLAGS! /D_CRT_SECURE_NO_WARNINGS /I src ^
+    /Fe"bin\LiteWidgets.exe" /Fo"bin\obj\\" /Fd"bin\LiteWidgets.pdb" ^
+    src\main.c src\desktop.c src\autostart.c src\settings.c %CORE% ^
+    bin\app.res ^
+    /link !LDFLAGS! user32.lib gdi32.lib gdiplus.lib shell32.lib shcore.lib ^
+    advapi32.lib shlwapi.lib comdlg32.lib comctl32.lib msimg32.lib
+
+if errorlevel 1 (
+    echo [build] FAILED
+    exit /b 1
+)
+echo [build] bin\LiteWidgets.exe ^(%CONFIG%^)
+
 endlocal

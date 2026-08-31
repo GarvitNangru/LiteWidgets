@@ -1,125 +1,162 @@
 #include "notes.h"
+
 #include "../widget.h"
 #include "../drawing.h"
+#include "../config.h"
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <shlwapi.h>
 
 typedef struct {
-    Widget base;
-    WidgetStyle style;
-    WCHAR* text_buffer;
-} NotesWidgetData;
+    Widget     base;
+    WidgetSpec spec;
+    WCHAR*     text;
+    WCHAR      path[MAX_PATH];
+    FILETIME   stamp;
+} NotesWidget;
+
+/* ─────────────────────────── loading ─────────────────────────── */
+
+static bool FileStamp(const WCHAR* path, FILETIME* out) {
+    WIN32_FILE_ATTRIBUTE_DATA data;
+    if (!GetFileAttributesExW(path, GetFileExInfoStandard, &data)) return false;
+    *out = data.ftLastWriteTime;
+    return true;
+}
+
+WCHAR* Notes_LoadText(const WCHAR* path) {
+    if (!path || !path[0]) return NULL;
+
+    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) return NULL;
+
+    LARGE_INTEGER size;
+    if (!GetFileSizeEx(file, &size) || size.QuadPart <= 0 || size.QuadPart > (8 << 20)) {
+        CloseHandle(file);
+        return NULL;
+    }
+
+    DWORD bytes = (DWORD)size.QuadPart;
+    char* raw = (char*)malloc(bytes + 2);
+    if (!raw) { CloseHandle(file); return NULL; }
+
+    DWORD read = 0;
+    BOOL ok = ReadFile(file, raw, bytes, &read, NULL);
+    CloseHandle(file);
+    if (!ok) { free(raw); return NULL; }
+    raw[read] = '\0';
+    raw[read + 1] = '\0';
+
+    WCHAR* text = NULL;
+
+    /* UTF-16LE with a BOM: already wide, just copy past the marker. */
+    if (read >= 2 && (unsigned char)raw[0] == 0xFF && (unsigned char)raw[1] == 0xFE) {
+        size_t chars = (read - 2) / sizeof(WCHAR);
+        text = (WCHAR*)malloc((chars + 1) * sizeof(WCHAR));
+        if (text) {
+            memcpy(text, raw + 2, chars * sizeof(WCHAR));
+            text[chars] = L'\0';
+        }
+    } else {
+        const char* start = raw;
+        if (read >= 3 && (unsigned char)raw[0] == 0xEF &&
+            (unsigned char)raw[1] == 0xBB && (unsigned char)raw[2] == 0xBF)
+            start = raw + 3;
+
+        int chars = MultiByteToWideChar(CP_UTF8, 0, start, -1, NULL, 0);
+        if (chars > 0) {
+            text = (WCHAR*)malloc((size_t)chars * sizeof(WCHAR));
+            if (text) MultiByteToWideChar(CP_UTF8, 0, start, -1, text, chars);
+        }
+    }
+
+    free(raw);
+    return text;
+}
+
+/* ─────────────────────────── painting ─────────────────────────── */
+
+void Notes_Paint(const WidgetSpec* spec, const WCHAR* text,
+                 GpGraphics* gfx, int width, int height) {
+    if (!spec || !gfx) return;
+
+    const WidgetStyle* s = &spec->style;
+    Drawing_Surface(gfx, s, (float)width, (float)height);
+    if (!text || !text[0]) return;
+
+    float pad = s->padding;
+    GpRectF box = { pad, pad, (float)width - pad * 2.0f, (float)height - pad * 2.0f };
+    if (box.Width <= 0.0f || box.Height <= 0.0f) return;
+
+    WCHAR* shaped = NULL;
+    const WCHAR* display = text;
+    if (s->text_transform != TEXT_AS_IS) {
+        size_t len = wcslen(text) + 1;
+        shaped = (WCHAR*)malloc(len * sizeof(WCHAR));
+        if (shaped) display = Drawing_Transform(shaped, len, text, s->text_transform);
+    }
+
+    TextRun run = Drawing_Run(s, display, box);
+    Drawing_Text(gfx, &run);
+    free(shaped);
+}
+
+/* ─────────────────────────── widget plumbing ─────────────────────────── */
 
 static void Notes_Render(Widget* base, GpGraphics* gfx, int width, int height) {
-    NotesWidgetData* w = (NotesWidgetData*)base;
-    const WidgetStyle* s = &w->style;
+    NotesWidget* w = (NotesWidget*)base;
+    Notes_Paint(&w->spec, w->text, gfx, width, height);
+}
 
-    /* Background */
-    Drawing_WidgetBackground(gfx, s, width, height);
+/* Poll the file stamp rather than the contents: one stat call, no parsing. */
+static void Notes_OnTimer(Widget* base) {
+    NotesWidget* w = (NotesWidget*)base;
 
-    /* Text */
-    if (w->text_buffer) {
-        float pad = s->padding;
-        GpRectF layoutRect = { pad, pad, (float)width - pad * 2, (float)height - pad * 2 };
-        Drawing_Text(gfx, w->text_buffer, &layoutRect,
-                     s->font_family, s->font_size, s->font_style,
-                     s->text_color, s->align_h, s->align_v);
-    }
+    FILETIME stamp;
+    if (!FileStamp(w->path, &stamp)) return;
+    if (CompareFileTime(&stamp, &w->stamp) == 0) return;
+
+    w->stamp = stamp;
+    WCHAR* fresh = Notes_LoadText(w->path);
+    if (!fresh) return;
+
+    free(w->text);
+    w->text = fresh;
+    base->needs_render = true;
 }
 
 static void Notes_Destroy(Widget* base) {
-    NotesWidgetData* w = (NotesWidgetData*)base;
-    if (w->text_buffer) {
-        free(w->text_buffer);
-    }
+    NotesWidget* w = (NotesWidget*)base;
+    free(w->text);
     free(w);
 }
 
-static const WidgetVtable notes_vtable = {
+static const WidgetVtable kNotesVtable = {
     Notes_Render,
+    Notes_OnTimer,
     NULL,
     Notes_Destroy
 };
 
-/*
- * Resolve a potentially relative path against the INI file's directory.
- * If pathA is already absolute, use it directly.
- * Otherwise, combine it with the directory containing the INI file.
- */
-static void ResolvePathRelativeToIni(const char* iniPathA, const char* pathA,
-                                     WCHAR* outW, DWORD maxLen) {
-    WCHAR inputW[MAX_PATH];
-    MultiByteToWideChar(CP_UTF8, 0, pathA, -1, inputW, MAX_PATH);
-
-    /* If already absolute, use directly */
-    if (!PathIsRelativeW(inputW)) {
-        wcsncpy(outW, inputW, maxLen);
-        return;
-    }
-
-    /* Get INI file's directory */
-    WCHAR iniDirW[MAX_PATH];
-    MultiByteToWideChar(CP_UTF8, 0, iniPathA, -1, iniDirW, MAX_PATH);
-    PathRemoveFileSpecW(iniDirW);
-
-    /* Combine: iniDir + relative path */
-    PathCombineW(outW, iniDirW, inputW);
-}
-
-static WCHAR* LoadFileToWideString(const WCHAR* path) {
-    FILE* f = _wfopen(path, L"rb");
-    if (!f) return NULL;
-
-    fseek(f, 0, SEEK_END);
-    long fsize = ftell(f);
-    if (fsize <= 0) { fclose(f); return NULL; }
-    fseek(f, 0, SEEK_SET);
-
-    char* buf = (char*)malloc(fsize + 1);
-    if (!buf) { fclose(f); return NULL; }
-    fread(buf, 1, fsize, f);
-    buf[fsize] = '\0';
-    fclose(f);
-
-    /* Skip UTF-8 BOM if present */
-    char* start = buf;
-    if (fsize >= 3 && (unsigned char)buf[0] == 0xEF &&
-        (unsigned char)buf[1] == 0xBB && (unsigned char)buf[2] == 0xBF) {
-        start = buf + 3;
-    }
-
-    int wchars = MultiByteToWideChar(CP_UTF8, 0, start, -1, NULL, 0);
-    WCHAR* wbuf = (WCHAR*)malloc(wchars * sizeof(WCHAR));
-    if (wbuf) {
-        MultiByteToWideChar(CP_UTF8, 0, start, -1, wbuf, wchars);
-    }
-    free(buf);
-    return wbuf;
-}
-
-bool NotesWidget_Create(HINSTANCE hInstance, const char* iniPath,
-                        int x, int y, int width, int height,
-                        bool click_through, const char* path,
-                        const WidgetStyle* style) {
-    NotesWidgetData* w = (NotesWidgetData*)calloc(1, sizeof(NotesWidgetData));
+bool NotesWidget_Create(HINSTANCE hInstance, const char* iniPath, const WidgetSpec* spec) {
+    NotesWidget* w = (NotesWidget*)calloc(1, sizeof(NotesWidget));
     if (!w) return false;
 
-    w->style = *style;
+    w->spec = *spec;
+    Config_ResolvePath(iniPath, spec->path, w->path, MAX_PATH);
+    w->text = Notes_LoadText(w->path);
+    FileStamp(w->path, &w->stamp);
 
-    /* Resolve file path relative to INI directory */
-    WCHAR resolvedPath[MAX_PATH];
-    ResolvePathRelativeToIni(iniPath, path, resolvedPath, MAX_PATH);
-    w->text_buffer = LoadFileToWideString(resolvedPath);
-
-    if (!Widget_Init(&w->base, hInstance, &notes_vtable, x, y, width, height, 0, click_through)) {
-        if (w->text_buffer) free(w->text_buffer);
+    /* Only widgets that opt into reloading get a timer at all. */
+    UINT interval = (spec->reload_seconds > 0) ? (UINT)spec->reload_seconds * 1000u : 0u;
+    if (!Widget_Init(&w->base, hInstance, &kNotesVtable, spec, interval)) {
+        free(w->text);
         free(w);
         return false;
     }
 
-    /* CRITICAL: Initial render for layered window */
     Widget_Render(&w->base);
     return true;
 }

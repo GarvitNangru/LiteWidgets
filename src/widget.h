@@ -4,31 +4,72 @@
 
 #include <windows.h>
 #include <stdbool.h>
+
 #include "gdiplus_helpers.h"
+#include "spec.h"
 
 struct Widget;
 
 typedef struct WidgetVtable {
     void (*render)(struct Widget* w, GpGraphics* gfx, int width, int height);
     void (*on_timer)(struct Widget* w);
+    /*
+     * Optional. Returns the delay until this widget next needs to wake up,
+     * letting a clock sleep for a whole minute instead of polling every
+     * second. Return 0 to keep the current interval.
+     */
+    UINT (*next_interval)(struct Widget* w);
     void (*destroy)(struct Widget* w);
 } WidgetVtable;
 
 typedef struct Widget {
-    HWND hwnd;
+    HWND                hwnd;
     const WidgetVtable* vt;
-    int x, y, width, height;
-    UINT timer_interval_ms; /* 0 = no timer (static) */
-    bool click_through;
-    void* data; /* Widget specific data */
-    bool needs_render;
+
+    int   x, y;                  /* absolute desktop position */
+    int   width, height;
+    int   anchor;
+    int   monitor;
+    float radius;                /* corner radius, for the edit-mode overlay */
+
+    UINT  timer_interval_ms;     /* 0 = no timer */
+    bool  click_through;
+    bool  click_through_saved;
+    BYTE  opacity;               /* 0..255, applied by the layered blend */
+    bool  needs_render;
+
+    char  section[LW_SECTION_LEN];
+    void* data;
 } Widget;
 
+/*
+ * Create the window and register the widget. Geometry comes from `spec`;
+ * `timerIntervalMs` of 0 means the widget never wakes up on its own.
+ */
 bool Widget_Init(Widget* w, HINSTANCE hInstance, const WidgetVtable* vt,
-                 int x, int y, int width, int height,
-                 UINT timer_interval_ms, bool click_through);
+                 const WidgetSpec* spec, UINT timerIntervalMs);
+
 void Widget_Render(Widget* w);
 void Widget_SetClickThrough(Widget* w, bool enable);
 void Widget_Destroy(Widget* w);
+
+/* Tear every live widget down — used by reload, so the process keeps running. */
+void Widget_DestroyAll(void);
+int  Widget_Count(void);
+
+/* Force a repaint of everything, e.g. after a display change. */
+void Widget_RenderAll(void);
+
+/*
+ * Edit mode: widgets become draggable, gain a visible outline and float above
+ * other windows. Leaving edit mode restores click-through and z-order.
+ */
+void Widget_SetEditMode(bool enable);
+bool Widget_EditMode(void);
+void Widget_SetSnapGrid(int pixels);
+int  Widget_SnapGrid(void);
+
+/* Write the current positions back to the INI as anchor-relative offsets. */
+void Widget_SavePositions(const char* iniPath);
 
 #endif /* WIDGET_H */
