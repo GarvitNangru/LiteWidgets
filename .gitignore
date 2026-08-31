@@ -10,6 +10,9 @@ out/
 
 # Local state
 debug.log
+# The live config is yours: the app writes it on first run from
+# config/widgets.example.ini, so tweaking it never dirties the repo.
+config/widgets.ini
 config/widgets.local.ini
 
 # OS

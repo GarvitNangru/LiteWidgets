@@ -48,6 +48,11 @@ to check that a change to the drawing code did not quietly break a theme.
 For the real thing, `LiteWidgets.exe --config examples\showcase.ini --settings`
 starts with a specific config and opens the editor immediately.
 
+`config/widgets.ini` is created on first run from
+`config/widgets.example.ini` and is not tracked, so your own layout never
+turns up in `git status`. Change the example when you mean to change what
+ships.
+
 ## Adding a config key
 
 Config lives in one place. To add a key:

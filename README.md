@@ -108,7 +108,11 @@ cmake -B build && cmake --build build --config Release
 
 ## Configuration
 
-Widgets live in `config/widgets.ini`. One `[section]` per widget:
+Widgets live in `config/widgets.ini`, which the app creates on first run from
+the tracked `config/widgets.example.ini`. The live file is deliberately not in
+git, so your own layout never shows up as a change to the repository.
+
+One `[section]` per widget:
 
 ```ini
 [clock]

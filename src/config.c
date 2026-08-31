@@ -210,6 +210,17 @@ bool Config_WriteDefault(const char* iniPath) {
         CreateDirectoryA(folder, NULL);
     }
 
+    /*
+     * Start from the example that ships with the project when it is there.
+     * The live config is deliberately not tracked in git, so editing your
+     * own layout never shows up as a change to the repository.
+     */
+    if (slash) {
+        char example[MAX_PATH];
+        _snprintf(example, MAX_PATH, "%s\\widgets.example.ini", folder);
+        if (CopyFileA(example, iniPath, TRUE)) return true;
+    }
+
     HANDLE file = CreateFileA(iniPath, GENERIC_WRITE, 0, NULL, CREATE_NEW,
                               FILE_ATTRIBUTE_NORMAL, NULL);
     if (file == INVALID_HANDLE_VALUE) return false;

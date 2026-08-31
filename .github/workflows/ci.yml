@@ -52,7 +52,7 @@ jobs:
           name: LiteWidgets
           path: |
             bin/LiteWidgets.exe
-            config/widgets.ini
+            config/widgets.example.ini
             examples/
 
   cmake:
