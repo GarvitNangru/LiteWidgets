@@ -1,12 +1,16 @@
-# Build artifacts
+# Build output
 bin/
+build/
+out/
 *.obj
 *.pdb
 *.ilk
 *.res
+*.exe
 
-# Debug
+# Local state
 debug.log
+config/widgets.local.ini
 
 # OS
 Thumbs.db
