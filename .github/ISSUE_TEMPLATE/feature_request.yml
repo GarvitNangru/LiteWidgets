@@ -1,0 +1,29 @@
+name: Feature request
+description: Suggest a widget, a styling knob, or a change to how something works
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do
+      description: Describe the goal rather than the implementation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like
+      description: If it is a new config key, sketch what it would look like.
+      render: ini
+
+  - type: checkboxes
+    id: cost
+    attributes:
+      label: Resource cost
+      description: >
+        LiteWidgets aims to stay close to idle. Features that need polling,
+        network access, or animation need to justify their cost.
+      options:
+        - label: This can be done without waking the process up more often
+        - label: This needs a timer or background work, and I have said why below

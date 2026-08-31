@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build (${{ matrix.config }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [release, debug]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Build
+        shell: cmd
+        run: build.bat ${{ matrix.config }} tools
+
+      - name: Check the configuration reference is up to date
+        shell: cmd
+        run: bin\docgen.exe docs\CONFIGURATION.md --check
+
+      # Rendering runs entirely offscreen, so it works on a headless runner and
+      # catches painting regressions the compiler cannot see.
+      - name: Render every example config
+        shell: cmd
+        run: |
+          for %%f in (examples\*.ini) do bin\render.exe %%f artifacts\%%~nf --sheet || exit /b 1
+
+      - name: Upload rendered widgets
+        if: matrix.config == 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: rendered-widgets
+          path: artifacts/
+
+      - name: Upload binary
+        if: matrix.config == 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiteWidgets
+          path: |
+            bin/LiteWidgets.exe
+            config/widgets.ini
+            examples/
+
+  cmake:
+    name: CMake build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -B build
+      - name: Build
+        run: cmake --build build --config Release
