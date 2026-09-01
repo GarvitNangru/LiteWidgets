@@ -32,6 +32,12 @@ preview calls it with an offscreen bitmap; `tools/render.c` calls it with one
 it saves to PNG. There is no second code path to keep in sync, which is why
 the preview is exact rather than approximate.
 
+**Input goes through one hook.** A widget may implement `on_message` in its
+vtable and see window messages before the default handling. That is the whole
+of the interactivity story: the notes editor takes keystrokes through it, and
+both notes and image accept dropped files. Arranging outranks it -- while the
+user is placing widgets, every widget is a draggable block and nothing else.
+
 **Config is one typed struct.** `WidgetSpec` (in `spec.h`) is the complete
 description of a widget. `Spec_Set()` maps a single `key = value` pair onto
 it, and everything that produces config — the INI loader, the style presets,
@@ -50,10 +56,11 @@ adding a field, one line in `Spec_Set()`, and one row in the property table.
 | `drawing.c` | Rounded panels, gradients, the glyph-path text pipeline (glow, shadow, outline, tracking) |
 | `layout.c` | Anchors and monitor geometry |
 | `timefmt.c` | Locale-aware date/time patterns |
-| `settings.c` | The editor window, built from the property registry |
+| `settings.c` | The editor window and its owner-drawn controls, built from the property registry |
 | `autostart.c` | The per-user Run key |
 | `desktop.c` | Desktop-shell integration hooks |
 | `widgets/*.c` | One painter and one lifecycle per widget type |
+| `tools/mkicon.c` | Draws the application icon and writes the .ico the build embeds |
 
 ## The property registry
 

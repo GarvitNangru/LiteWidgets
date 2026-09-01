@@ -78,6 +78,7 @@ Look at `src/widgets/clock.c` for the shape. A widget provides:
 - a **stateless painter** — `Thing_Paint(spec, ..., gfx, w, h)` — that draws
   into any graphics context and touches no window state,
 - a `WidgetVtable` with `render` / `on_timer` / `next_interval` / `destroy`,
+  and optionally `on_message` if the widget is interactive,
 - a `ThingWidget_Create(...)` that allocates, fills its spec, and calls
   `Widget_Init`.
 
@@ -88,6 +89,13 @@ will.
 
 If the widget needs to update on a schedule, implement `next_interval` and
 return the time until the next moment its output would actually change.
+
+If it needs to respond to the user, implement `on_message`. Widgets are
+`WS_EX_NOACTIVATE`, so one that wants the keyboard has to ask for it with
+`Widget_SetFocusable` and give it back when it is done. Implementing
+`on_message` also opts the widget into file drops. A widget that should
+receive clicks at all wants `click_through` off, which `Spec_DefaultFor`
+decides per type.
 
 ## Style
 

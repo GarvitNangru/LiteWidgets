@@ -6,8 +6,43 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- The `notes` widget is editable in place: click it and type. Mouse and
+  keyboard selection, double-click for a word, clipboard, undo that folds a
+  burst of typing into one step, and an autosave a second and a half after
+  you stop. A note with no file yet is given one on the first keystroke.
+- The `image` widget takes a click to open a picker, or a dropped file, and
+  writes the path back to the config relative to the config folder.
+- Both file-backed widgets say what to do with them when they are empty.
+- An application icon, drawn from `tools/mkicon.c` at build time into a
+  nine-size .ico. The repository still ships no binary assets.
+
+### Changed
+
+- The settings editor is rebuilt: a scrolling property pane, a resizable
+  window, owner-drawn controls throughout, a font list that renders every
+  installed family in its own face, colour rows with a swatch and an alpha
+  slider, and a light or dark theme taken from the system setting.
+- Arranging drags widgets directly rather than through DefWindowProc's move
+  loop, which is what made it feel behind the cursor. Hold Shift to leave
+  the snap grid.
+- `click_through` now defaults per widget type: off for `notes` and `image`,
+  on for `clock`.
+- Text is laid out with GDI+'s typographic string format rather than the
+  default one, so measured and drawn glyph positions agree. Notes wrap their
+  own lines, which is what lets the caret land where the glyphs did.
+
 ### Fixed
 
+- Settings options disappeared as you used the editor: property rows were
+  siblings of the tab control they overlapped, so a tab repaint painted over
+  them, and a page with more rows than fitted ran off the bottom of a window
+  that could not be resized.
+- Clicks never reached a widget that wanted them. Widgets are owned by the
+  desktop, and Windows redirects a click on an owned no-activate window into
+  activating the owner, which took the keyboard straight back off the widget
+  that had just asked for it.
 - Widgets vanished behind the wallpaper when the desktop was shown, and never
   came back. They were unowned top-level windows parked at `HWND_BOTTOM`, so
   "show desktop" raised the desktop band over them permanently. They are now

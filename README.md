@@ -1,3 +1,5 @@
+<img src="assets/icon.svg" width="72" align="right" alt="">
+
 # LiteWidgets
 
 Desktop widgets for Windows that stay out of the way — of your screen, and of
@@ -14,8 +16,9 @@ dependencies to vendor, one executable and one text file.
 
 - **Lives on the desktop layer.** Widgets sit above your wallpaper and behind
   your windows. Win+D and "show desktop" don't touch them.
-- **Stays out of the way of clicks.** Input passes straight through to the
-  desktop icons underneath.
+- **Stays out of the way of clicks.** A clock passes input straight through to
+  the desktop icons underneath. Widgets you actually use — notes, images —
+  keep their clicks, and either default is one config key away.
 - **Sleeps between updates.** A clock showing hours and minutes wakes up once
   a minute, not sixty times. Seconds and animation are opt-in, and only then
   does it tick faster.
@@ -31,8 +34,8 @@ dependencies to vendor, one executable and one text file.
 | Type | What it is |
 | --- | --- |
 | `clock` | Digital or analog. Custom time and date patterns, locale-aware day and month names, optional seconds, blinking separator, sweeping second hand. |
-| `notes` | Renders a text file. Optionally re-reads it when the file changes. |
-| `image` | A PNG/JPEG, fitted with `contain`, `cover` or `stretch`, clipped to the panel's rounded corners. |
+| `notes` | A text file you can edit in place: click it and type. Selection, clipboard and undo work the way they do everywhere else, and it saves itself. Optionally re-reads the file when something else changes it. |
+| `image` | A PNG/JPEG, fitted with `contain`, `cover` or `stretch`, clipped to the panel's rounded corners. Click it to pick a file, or drop one on it. |
 
 ## Styling
 
@@ -75,9 +78,13 @@ The preview on the right calls the *same painter* the desktop does, so what
 you see is exactly what you get — including transparency, which is why it's
 drawn over a checkerboard.
 
+Colour rows carry a swatch, a hex field and an alpha slider. The font list
+draws every installed family in its own face. The whole window follows your
+system light or dark setting.
+
 **Arrange on desktop** makes every widget draggable in place, snapped to an
-8px grid, and writes the positions back as anchor-relative offsets when you're
-done.
+8px grid — hold Shift for the last few pixels — and writes the positions back
+as anchor-relative offsets when you're done.
 
 ## Install
 
