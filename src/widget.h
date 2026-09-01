@@ -20,6 +20,16 @@ typedef struct WidgetVtable {
      */
     UINT (*next_interval)(struct Widget* w);
     void (*destroy)(struct Widget* w);
+    /*
+     * Optional. Sees window messages before the default handling, which is
+     * how a widget becomes interactive: the notes editor takes keystrokes
+     * this way, and both notes and image accept dropped files. Return true
+     * to consume the message, optionally setting *result.
+     *
+     * Implementing this also opts the widget into file drops.
+     */
+    bool (*on_message)(struct Widget* w, UINT msg, WPARAM wParam, LPARAM lParam,
+                       LRESULT* result);
 } WidgetVtable;
 
 typedef struct Widget {
@@ -53,6 +63,29 @@ bool Widget_Init(Widget* w, HINSTANCE hInstance, const WidgetVtable* vt,
 void Widget_Render(Widget* w);
 void Widget_SetClickThrough(Widget* w, bool enable);
 void Widget_Destroy(Widget* w);
+
+/*
+ * Let the widget take the keyboard.
+ *
+ * Widgets are WS_EX_NOACTIVATE so that clicking one never steals focus from
+ * whatever the user was doing. A widget that wants to be typed into has to
+ * drop that for as long as it is being edited, and gets raised while it is,
+ * so it is not being edited underneath another window.
+ */
+void Widget_SetFocusable(Widget* w, bool enable);
+
+/* Put one widget back on the layer its z_order asks for. */
+void Widget_Restack(Widget* w);
+
+/* Timer ids a widget may use for itself; the engine owns everything else. */
+#define IDT_WIDGET_USER0 1010
+#define IDT_WIDGET_USER1 1011
+
+/*
+ * Sent to every widget when arranging starts or stops. A widget that is in
+ * the middle of an interaction should commit whatever it has and stop.
+ */
+#define WM_LW_CANCEL_EDIT (WM_USER + 10)
 
 /* Tear every live widget down — used by reload, so the process keeps running. */
 void Widget_DestroyAll(void);

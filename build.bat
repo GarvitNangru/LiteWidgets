@@ -90,7 +90,7 @@ if not defined TOOLS goto :done
 cl.exe /nologo /W4 /std:c17 !CFLAGS! /D_CRT_SECURE_NO_WARNINGS /I src ^
     /Fe"bin\render.exe" /Fo"bin\obj-tools\\" /Fd"bin\render.pdb" ^
     tools\render.c %CORE% ^
-    /link !LDFLAGS! user32.lib gdi32.lib gdiplus.lib shlwapi.lib
+    /link !LDFLAGS! user32.lib gdi32.lib gdiplus.lib shlwapi.lib shell32.lib comdlg32.lib
 
 if errorlevel 1 (
     echo [build] tools FAILED

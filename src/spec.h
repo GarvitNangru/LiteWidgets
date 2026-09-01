@@ -97,6 +97,7 @@ typedef struct {
     int         monitor;        /* -1 = primary */
     int         z_order;        /* ZOrder */
     bool        click_through;
+    bool        click_through_set;  /* stated in the config, not derived */
     float       opacity;        /* 0..1, multiplies every alpha channel */
 
     bool        show_seconds;   /* drives the tick rate for time-based widgets */
@@ -154,5 +155,15 @@ const char*    Spec_GroupName(int group);
 
 /* True when a property applies to the given widget type. */
 bool Spec_PropAppliesTo(const PropDef* prop, int type);
+
+/*
+ * The default a property takes for one widget type.
+ *
+ * Almost every default is the same everywhere, but not all: a clock is a
+ * decoration you click through, while notes and images are things you use.
+ * The editor and the generated reference both resolve defaults through here
+ * so neither can disagree with the loader.
+ */
+const char* Spec_DefaultFor(const PropDef* prop, int type);
 
 #endif /* SPEC_H */

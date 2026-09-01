@@ -146,12 +146,27 @@ static GpFontFamily* MakeFamily(const WCHAR* name) {
     return family;
 }
 
+/*
+ * Built on the typographic format rather than the default one.
+ *
+ * GDI+'s default string format pads every string by about a sixth of an em on
+ * each side. That padding is invisible until something has to know where a
+ * glyph actually landed — the notes editor placing a caret, say — at which
+ * point measured and drawn positions disagree by a couple of pixels. Sharing
+ * one convention between drawing and measuring is worth the hair's-breadth
+ * shift it causes elsewhere.
+ */
 static GpStringFormat* MakeFormat(int alignH, int alignV, bool noWrap) {
+    GpStringFormat* generic = NULL;
     GpStringFormat* fmt = NULL;
-    if (GdipCreateStringFormat(0, LANG_NEUTRAL, &fmt) != 0 || !fmt) return NULL;
+    if (GdipStringFormatGetGenericTypographic(&generic) == 0 && generic)
+        GdipCloneStringFormat(generic, &fmt);
+    if (!fmt && GdipCreateStringFormat(0, LANG_NEUTRAL, &fmt) != 0) return NULL;
+
     GdipSetStringFormatAlign(fmt, (GpStringAlignment)alignH);
     GdipSetStringFormatLineAlign(fmt, (GpStringAlignment)alignV);
-    GdipSetStringFormatFlags(fmt, StringFormatFlagsNoClip | (noWrap ? StringFormatFlagsNoWrap : 0));
+    GdipSetStringFormatFlags(fmt, StringFormatFlagsNoClip | StringFormatFlagsNoFitBlackBox |
+                                  (noWrap ? StringFormatFlagsNoWrap : 0));
     GdipSetStringFormatTrimming(fmt, StringTrimmingNone);
     return fmt;
 }
@@ -399,6 +414,73 @@ float Drawing_MeasureWidth(GpGraphics* gfx, const TextRun* r) {
     if (measure) GdipDeleteStringFormat(measure);
     GdipDeleteFontFamily(family);
     return width;
+}
+
+/* ─────────────────────────── metrics ─────────────────────────── */
+
+struct DrawingMetrics {
+    GpGraphics*     gfx;
+    GpFontFamily*   family;
+    GpFont*         font;
+    GpStringFormat* measure;
+    float           tracking;
+    float           line_height;
+};
+
+DrawingMetrics* Drawing_OpenMetrics(GpGraphics* gfx, const TextRun* run) {
+    if (!gfx || !run) return NULL;
+
+    DrawingMetrics* m = (DrawingMetrics*)calloc(1, sizeof(DrawingMetrics));
+    if (!m) return NULL;
+
+    m->gfx      = gfx;
+    m->tracking = run->letter_spacing;
+    m->family   = MakeFamily(run->font_family);
+    m->measure  = MakeMeasureFormat();
+
+    if (!m->family || !m->measure ||
+        GdipCreateFont(m->family, run->font_size, run->font_style, UnitPixel, &m->font) != 0) {
+        Drawing_CloseMetrics(m);
+        return NULL;
+    }
+
+    REAL height = run->font_size * 1.2f;
+    GdipGetFontHeight(m->font, gfx, &height);
+    if (run->line_spacing > 0.01f) height *= run->line_spacing;
+    m->line_height = height;
+    return m;
+}
+
+void Drawing_CloseMetrics(DrawingMetrics* m) {
+    if (!m) return;
+    if (m->font)    GdipDeleteFont(m->font);
+    if (m->measure) GdipDeleteStringFormat(m->measure);
+    if (m->family)  GdipDeleteFontFamily(m->family);
+    free(m);
+}
+
+float Drawing_LineHeight(const DrawingMetrics* m) {
+    return m ? m->line_height : 0.0f;
+}
+
+float Drawing_Extent(DrawingMetrics* m, const WCHAR* text, int count) {
+    static const GpRectF kWide = { 0.0f, 0.0f, 16384.0f, 16384.0f };
+    if (!m || !text || count <= 0) return 0.0f;
+
+    /* Without tracking the whole span is one call, which is the common case. */
+    if (fabsf(m->tracking) <= 0.01f) {
+        GpRectF box = { 0, 0, 0, 0 };
+        GdipMeasureString(m->gfx, text, count, m->font, &kWide, m->measure, &box, NULL, NULL);
+        return box.Width;
+    }
+
+    float advance = 0.0f;
+    for (int i = 0; i < count; i++) {
+        GpRectF box = { 0, 0, 0, 0 };
+        GdipMeasureString(m->gfx, text + i, 1, m->font, &kWide, m->measure, &box, NULL, NULL);
+        advance += box.Width + m->tracking;
+    }
+    return advance - m->tracking;
 }
 
 void Drawing_TextSegments(GpGraphics* gfx, const TextRun* base,

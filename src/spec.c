@@ -127,7 +127,11 @@ bool Spec_Set(WidgetSpec* spec, const char* key, const char* value) {
         else                                     spec->z_order = ZORDER_DESKTOP;
         return true;
     }
-    if (KEY("click_through")) { spec->click_through = Style_ParseBool(value, true); return true; }
+    if (KEY("click_through")) {
+        spec->click_through = Style_ParseBool(value, true);
+        spec->click_through_set = true;
+        return true;
+    }
     if (KEY("opacity")) {
         float v = (float)atof(value);
         spec->opacity = (v > 1.0f) ? v / 100.0f : v;   /* accept 0..1 or 0..100 */
@@ -235,6 +239,14 @@ void Spec_Finalize(WidgetSpec* spec) {
 
     if (c->hand_scale <= 0.0f) c->hand_scale = 1.0f;
     if (spec->opacity <= 0.0f) spec->opacity = 1.0f;
+
+    /*
+     * A clock is looked at, so clicks belong to the desktop behind it. Notes
+     * and images are used -- typed into, dropped onto -- so they keep their
+     * clicks unless the config says otherwise.
+     */
+    if (!spec->click_through_set)
+        spec->click_through = (spec->type == WIDGET_CLOCK);
 }
 
 /* ─────────────────────────── property registry ─────────────────────────── */
@@ -255,7 +267,7 @@ static const PropDef g_props[] = {
 {"width",              "Width",             PK_INT,   PG_LAYOUT,  TYPE_ANY,   NULL,                                       "320",         "Widget width in pixels"},
 {"height",             "Height",            PK_INT,   PG_LAYOUT,  TYPE_ANY,   NULL,                                       "140",         "Widget height in pixels"},
 {"opacity",            "Opacity",           PK_FLOAT, PG_LAYOUT,  TYPE_ANY,   NULL,                                       "1.0",         "Master transparency, 0.0 to 1.0"},
-{"click_through",      "Click-through",     PK_BOOL,  PG_LAYOUT,  TYPE_ANY,   NULL,                                       "true",        "Let clicks pass to the desktop underneath"},
+{"click_through",      "Click-through",     PK_BOOL,  PG_LAYOUT,  TYPE_ANY,   NULL,                                       "true",        "Let clicks pass to the desktop underneath; off by default for notes and image, which you interact with"},
 {"z_order",            "Layer",             PK_ENUM,  PG_LAYOUT,  TYPE_ANY,   "desktop|bottom|top",                       "desktop",     "desktop follows the wallpaper, bottom pins to the very back, top floats above all windows"},
 
 {"bg_color",           "Background",        PK_COLOR, PG_SURFACE, TYPE_ANY,   NULL,                                       "D9181825",    "Panel fill, AARRGGBB"},
@@ -339,6 +351,13 @@ const PropDef* Spec_FindProperty(const char* key) {
     for (int i = 0; i < count; i++)
         if (_stricmp(props[i].key, key) == 0) return &props[i];
     return NULL;
+}
+
+const char* Spec_DefaultFor(const PropDef* prop, int type) {
+    if (!prop) return "";
+    if (_stricmp(prop->key, "click_through") == 0)
+        return (type == WIDGET_CLOCK) ? "true" : "false";
+    return prop->def;
 }
 
 bool Spec_PropAppliesTo(const PropDef* prop, int type) {

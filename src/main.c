@@ -312,6 +312,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
                                        NULL, OnForegroundChanged, 0, 0,
                                        WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
 
+    /* A widget that rewrites its own config keeps the open editor in step. */
+    Config_OnChanged(Settings_NotifyConfigChanged);
+
     DesktopHost_Init();
     Config_Load(g_iniPath, hInstance);
     if (openSettings) Settings_Open(hInstance, g_iniPath);

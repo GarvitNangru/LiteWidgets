@@ -160,7 +160,8 @@ void Config_Paint(const WidgetSpec* spec, const char* iniPath,
             WCHAR path[MAX_PATH];
             Config_ResolvePath(iniPath, spec->path, path, MAX_PATH);
             WCHAR* text = Notes_LoadText(path);
-            Notes_Paint(spec, text ? text : L"(no file selected)", gfx, width, height);
+            /* NULL, not a stand-in string: the widget draws its own hint. */
+            Notes_Paint(spec, text, gfx, width, height);
             free(text);
             break;
         }
@@ -175,6 +176,23 @@ void Config_Paint(const WidgetSpec* spec, const char* iniPath,
         default:
             break;
     }
+}
+
+/* ─────────────────────────── writing back ─────────────────────────── */
+
+static ConfigChangedFn g_observer = NULL;
+
+void Config_OnChanged(ConfigChangedFn observer) {
+    g_observer = observer;
+}
+
+void Config_WriteKey(const char* iniPath, const char* section,
+                     const char* key, const char* value) {
+    if (!iniPath || !iniPath[0] || !section || !section[0] || !key) return;
+
+    WritePrivateProfileStringA(section, key, value, iniPath);
+    WritePrivateProfileStringA(NULL, NULL, NULL, iniPath);   /* flush */
+    if (g_observer) g_observer();
 }
 
 /* ─────────────────────────── bootstrap ─────────────────────────── */

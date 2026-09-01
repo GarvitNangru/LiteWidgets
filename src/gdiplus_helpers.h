@@ -80,6 +80,11 @@ typedef enum {
 } GpLineJoin;
 
 typedef enum {
+    DashStyleSolid = 0, DashStyleDash = 1, DashStyleDot = 2,
+    DashStyleDashDot = 3, DashStyleDashDotDot = 4, DashStyleCustom = 5
+} GpDashStyle;
+
+typedef enum {
     StringAlignmentNear   = 0,
     StringAlignmentCenter = 1,
     StringAlignmentFar    = 2
@@ -120,6 +125,7 @@ typedef enum {
 #define StringFormatFlagsNoWrap                0x00001000
 #define StringFormatFlagsLineLimit             0x00002000
 #define StringFormatFlagsNoClip                0x00004000
+#define StringFormatFlagsNoFitBlackBox         0x00000004
 #define StringFormatFlagsMeasureTrailingSpaces 0x00000800
 
 /* Pixel formats */
@@ -196,6 +202,7 @@ GpStatus WINGDIPAPI GdipSetPenWidth(GpPen *pen, REAL width);
 GpStatus WINGDIPAPI GdipSetPenColor(GpPen *pen, ARGB argb);
 /* Exported as GdipSetPenMode; PenAlignment is the parameter's type. */
 GpStatus WINGDIPAPI GdipSetPenMode(GpPen *pen, GpPenAlignment penMode);
+GpStatus WINGDIPAPI GdipSetPenDashStyle(GpPen *pen, GpDashStyle dashStyle);
 GpStatus WINGDIPAPI GdipSetPenStartCap(GpPen *pen, GpLineCap startCap);
 GpStatus WINGDIPAPI GdipSetPenEndCap(GpPen *pen, GpLineCap endCap);
 GpStatus WINGDIPAPI GdipSetPenLineJoin(GpPen *pen, GpLineJoin lineJoin);

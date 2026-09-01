@@ -79,6 +79,26 @@ void Drawing_Panel(GpGraphics* gfx, ARGB fill, ARGB fill2, int gradient,
 /* Create a linear gradient brush over `rect`; returns NULL for solid fills. */
 GpBrush* Drawing_GradientBrush(const GpRectF* rect, ARGB c1, ARGB c2, int gradient);
 
+/*
+ * Reusable text metrics.
+ *
+ * Measuring one string at a time through Drawing_MeasureWidth rebuilds the
+ * font on every call, which is fine for a clock and far too slow for laying
+ * out an editable note. Opening a metrics handle keeps the font, family and
+ * string format alive across the hundreds of measurements a wrap pass and a
+ * caret hit test need.
+ */
+typedef struct DrawingMetrics DrawingMetrics;
+
+DrawingMetrics* Drawing_OpenMetrics(GpGraphics* gfx, const TextRun* run);
+void            Drawing_CloseMetrics(DrawingMetrics* m);
+
+/* Width of the first `count` characters, including letter spacing. */
+float Drawing_Extent(DrawingMetrics* m, const WCHAR* text, int count);
+
+/* Baseline-to-baseline distance, with the run's line spacing applied. */
+float Drawing_LineHeight(const DrawingMetrics* m);
+
 /* Apply a text transform in place. Returns `dst`. */
 WCHAR* Drawing_Transform(WCHAR* dst, size_t cap, const WCHAR* src, int transform);
 

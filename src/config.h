@@ -37,4 +37,20 @@ void Config_Paint(const WidgetSpec* spec, const char* iniPath,
 /* Write a starter config when none exists yet. */
 bool Config_WriteDefault(const char* iniPath);
 
+/*
+ * Persist one key for a widget's own section.
+ *
+ * Interactive widgets change their own configuration -- an image is given a
+ * new file, a note is given one for the first time -- and the change has to
+ * outlive the process. Routing it through here also tells whoever is watching
+ * the config, which is how the settings editor stays in step without the
+ * widgets having to know it exists.
+ */
+void Config_WriteKey(const char* iniPath, const char* section,
+                     const char* key, const char* value);
+
+/* Register the observer notified by Config_WriteKey. NULL clears it. */
+typedef void (*ConfigChangedFn)(void);
+void Config_OnChanged(ConfigChangedFn observer);
+
 #endif /* CONFIG_H */

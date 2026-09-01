@@ -104,7 +104,21 @@ static void ArmTimer(Widget* w) {
     SetTimer(w->hwnd, IDT_WIDGET_TIMER, delay, NULL);
 }
 
-/* ─────────────────────────── window procedure ─────────────────────────── */
+/* ─────────────────────────── dragging ─────────────────────────── */
+
+/*
+ * Widgets are dragged by hand rather than through DefWindowProc's HTCAPTION
+ * move loop.
+ *
+ * The system loop is built for framed windows: it runs its own modal message
+ * pump, negotiates with the shell over every step, and cannot be told about
+ * a snap grid except through WM_MOVING after the fact. On a layered window
+ * living in the desktop band that adds up to visible lag between the cursor
+ * and the widget. Tracking the mouse ourselves is one SetWindowPos per move
+ * message, which the compositor turns into a pure surface move.
+ */
+static Widget* g_dragging = NULL;
+static POINT   g_dragGrab;       /* cursor offset inside the widget */
 
 static int SnapTo(int value, int grid) {
     if (grid <= 1) return value;
@@ -112,8 +126,75 @@ static int SnapTo(int value, int grid) {
     return ((value + (value >= 0 ? half : -half)) / grid) * grid;
 }
 
+static void BeginDrag(Widget* w, HWND hWnd) {
+    POINT cursor;
+    GetCursorPos(&cursor);
+
+    RECT rc;
+    GetWindowRect(hWnd, &rc);
+    g_dragGrab.x = cursor.x - rc.left;
+    g_dragGrab.y = cursor.y - rc.top;
+    g_dragging = w;
+    SetCapture(hWnd);
+}
+
+static void DragTo(Widget* w) {
+    POINT cursor;
+    GetCursorPos(&cursor);
+
+    int x = cursor.x - g_dragGrab.x;
+    int y = cursor.y - g_dragGrab.y;
+
+    /* Holding Shift drops the grid, for the last few pixels. */
+    if (!(GetKeyState(VK_SHIFT) & 0x8000)) {
+        x = SnapTo(x, g_snapGrid);
+        y = SnapTo(y, g_snapGrid);
+    }
+    if (x == w->x && y == w->y) return;
+
+    w->x = x;
+    w->y = y;
+    SetWindowPos(w->hwnd, NULL, x, y, 0, 0,
+                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+static void EndDrag(void) {
+    if (!g_dragging) return;
+    g_dragging = NULL;
+    if (GetCapture()) ReleaseCapture();
+}
+
+/* ─────────────────────────── window procedure ─────────────────────────── */
+
 static LRESULT CALLBACK WidgetWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     Widget* w = (Widget*)GetWindowLongPtrA(hWnd, GWLP_USERDATA);
+
+    /*
+     * Arranging outranks the widget's own behaviour: while the user is
+     * placing widgets, every one of them is a draggable block and nothing
+     * else. Outside edit mode, an interactive widget sees the message first.
+     */
+    if (w && g_editMode) {
+        switch (msg) {
+            case WM_LBUTTONDOWN: BeginDrag(w, hWnd);        return 0;
+            case WM_MOUSEMOVE:   if (g_dragging == w) DragTo(w); return 0;
+            case WM_LBUTTONUP:   EndDrag();                 return 0;
+            case WM_CAPTURECHANGED:
+                if (g_dragging == w) g_dragging = NULL;
+                return 0;
+            case WM_NCHITTEST:   return HTCLIENT;
+            default: break;
+        }
+    } else if (w && w->vt->on_message) {
+        LRESULT result = 0;
+        if (w->vt->on_message(w, msg, wParam, lParam, &result)) {
+            if (w->needs_render) {
+                Widget_Render(w);
+                w->needs_render = false;
+            }
+            return result;
+        }
+    }
 
     switch (msg) {
         case WM_NCCREATE: {
@@ -142,24 +223,16 @@ static LRESULT CALLBACK WidgetWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM
             }
             break;
 
-        /* Snap to the grid while a widget is being dragged in edit mode. */
-        case WM_MOVING: {
-            if (w && g_editMode && g_snapGrid > 1) {
-                RECT* rc = (RECT*)lParam;
-                int width  = rc->right - rc->left;
-                int height = rc->bottom - rc->top;
-                rc->left = SnapTo(rc->left, g_snapGrid);
-                rc->top  = SnapTo(rc->top,  g_snapGrid);
-                rc->right  = rc->left + width;
-                rc->bottom = rc->top  + height;
-                return TRUE;
-            }
-            break;
-        }
-
-        case WM_EXITSIZEMOVE:
-            if (w) Widget_Render(w);
-            return 0;
+        /*
+         * Widgets are owned by the desktop, and Windows redirects a click on
+         * an owned WS_EX_NOACTIVATE window into activating its owner. That
+         * brings Progman to the foreground and immediately takes the keyboard
+         * back off any widget that just asked for it. Refusing the activation
+         * still delivers the click, and a widget that genuinely needs focus
+         * takes it deliberately through Widget_SetFocusable.
+         */
+        case WM_MOUSEACTIVATE:
+            return MA_NOACTIVATE;
 
         case WM_SYSCOMMAND:
             if ((wParam & 0xFFF0) == SC_MINIMIZE) return 0;
@@ -182,9 +255,19 @@ static LRESULT CALLBACK WidgetWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM
 
         case WM_NCHITTEST:
             if (w && w->click_through) return HTTRANSPARENT;
-            return HTCAPTION;   /* the whole surface drags */
+            return HTCLIENT;
+
+        /*
+         * The class carries no cursor, so an interactive widget can ask for
+         * its own from on_message; anything that does not gets the arrow
+         * rather than whatever the last window left behind.
+         */
+        case WM_SETCURSOR:
+            SetCursor(LoadCursor(NULL, g_editMode ? IDC_SIZEALL : IDC_ARROW));
+            return TRUE;
 
         case WM_DESTROY:
+            if (g_dragging == w) EndDrag();
             if (w && w->timer_interval_ms > 0) KillTimer(hWnd, IDT_WIDGET_TIMER);
             return 0;
     }
@@ -197,10 +280,11 @@ static bool RegisterWidgetClass(HINSTANCE hInstance) {
 
     WNDCLASSA wc;
     memset(&wc, 0, sizeof(wc));
+    wc.style         = CS_DBLCLKS;   /* the notes editor selects words on one */
     wc.lpfnWndProc   = WidgetWndProc;
     wc.hInstance     = hInstance;
     wc.lpszClassName = "LiteWidgetClass";
-    wc.hCursor       = LoadCursor(NULL, IDC_SIZEALL);
+    wc.hCursor       = NULL;    /* set per message, see WM_SETCURSOR */
 
     registered = RegisterClassA(&wc) != 0;
     return registered;
@@ -250,6 +334,9 @@ bool Widget_Init(Widget* w, HINSTANCE hInstance, const WidgetVtable* vt,
                               pos.x, pos.y, spec->width, spec->height,
                               owner, NULL, hInstance, w);
     if (!w->hwnd) return false;
+
+    /* A widget that handles messages is one that can be dropped onto. */
+    if (vt->on_message) DragAcceptFiles(w->hwnd, TRUE);
 
     PlaceWidget(w);
     ArmTimer(w);
@@ -333,6 +420,47 @@ void Widget_SetClickThrough(Widget* w, bool enable) {
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE);
 }
 
+/*
+ * SetForegroundWindow is only granted to a process that already owns the
+ * foreground or has just received input. A widget click qualifies, but a
+ * shell that is mid-activation can still refuse, so borrow the current
+ * foreground thread's input queue for the moment it takes to hand focus over.
+ */
+static void TakeForeground(HWND hwnd) {
+    if (GetForegroundWindow() == hwnd) return;
+
+    DWORD self = GetCurrentThreadId();
+    DWORD owner = GetWindowThreadProcessId(GetForegroundWindow(), NULL);
+    bool attached = (owner != 0 && owner != self && AttachThreadInput(self, owner, TRUE));
+
+    SetForegroundWindow(hwnd);
+    BringWindowToTop(hwnd);
+    SetFocus(hwnd);
+
+    if (attached) AttachThreadInput(self, owner, FALSE);
+}
+
+void Widget_SetFocusable(Widget* w, bool enable) {
+    if (!w || !w->hwnd) return;
+
+    LONG_PTR exStyle = GetWindowLongPtrA(w->hwnd, GWL_EXSTYLE);
+    if (enable) exStyle &= ~WS_EX_NOACTIVATE;
+    else        exStyle |=  WS_EX_NOACTIVATE;
+    SetWindowLongPtrA(w->hwnd, GWL_EXSTYLE, exStyle);
+
+    if (enable) {
+        /* Raised only while it has the keyboard; Widget_Restack undoes it. */
+        SetWindowPos(w->hwnd, HWND_TOP, 0, 0, 0, 0, ZFLAGS);
+        TakeForeground(w->hwnd);
+    } else {
+        Widget_Restack(w);
+    }
+}
+
+void Widget_Restack(Widget* w) {
+    if (!g_editMode) PlaceWidget(w);
+}
+
 void Widget_Destroy(Widget* w) {
     if (!w) return;
     Untrack(w);
@@ -360,6 +488,9 @@ void Widget_SetEditMode(bool enable) {
     for (int i = 0; i < g_trackedCount; i++) {
         Widget* w = g_tracked[i];
         if (!w || !w->hwnd) continue;
+
+        /* Arranging and editing content are different modes; end the other. */
+        SendMessageA(w->hwnd, WM_LW_CANCEL_EDIT, 0, 0);
 
         if (enable) {
             w->click_through_saved = w->click_through;
