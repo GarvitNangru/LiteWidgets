@@ -62,6 +62,10 @@ enum { SUB_CTRL = 0, SUB_SWATCH, SUB_SLIDER, SUB_BROWSE };
 
 #define IDT_PREVIEW    1
 
+/* The pane's row geometry, shared by the layout and the visibility passes. */
+#define PANE_PAD       Scale(16)
+#define PANE_LABEL_W   Scale(120)
+
 /* ─────────────────────────── theme ─────────────────────────── */
 
 typedef struct {
@@ -165,6 +169,7 @@ static PropControls   g_controls[MAX_PROPS];
 /* Category pills currently on screen, as group ids. */
 static int  g_pages[PG__COUNT];
 static RECT g_pageRects[PG__COUNT];
+static int  g_pageWidth[PG__COUNT];
 static int  g_pageCount = 0;
 static int  g_activePage = 0;
 static int  g_hotPage = -1;
@@ -226,14 +231,56 @@ static void ApplyDarkTitleBar(HWND hWnd) {
 
 static HWND Make(const char* cls, const char* text, DWORD style, DWORD exStyle,
                  HWND parent, int id) {
-    HWND hWnd = CreateWindowExA(exStyle, cls, text, style | WS_CHILD | WS_VISIBLE,
+    HWND hWnd = CreateWindowExA(exStyle, cls, text,
+                                style | WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
                                 0, 0, 10, 10, parent, (HMENU)(INT_PTR)id, g_instance, NULL);
     if (hWnd) SendMessageA(hWnd, WM_SETFONT, (WPARAM)g_font, TRUE);
     return hWnd;
 }
 
+/*
+ * Layout runs far more often than anything actually moves: every resize, every
+ * scroll step and twice per relayout. A SetWindowPos that changes nothing still
+ * invalidates the control, so the whole pane used to repaint itself on each
+ * pass. Skip the moves that are not moves, and batch the rest into one atomic
+ * reposition so a scroll is a single repaint rather than one per row.
+ */
+static HDWP g_defer = NULL;
+
 static void Place(HWND hWnd, int x, int y, int w, int h) {
-    if (hWnd) SetWindowPos(hWnd, NULL, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+    if (!hWnd) return;
+
+    RECT rc;
+    GetWindowRect(hWnd, &rc);
+    MapWindowPoints(NULL, GetParent(hWnd), (POINT*)&rc, 2);
+    if (rc.left == x && rc.top == y && rc.right - rc.left == w && rc.bottom - rc.top == h)
+        return;
+
+    if (g_defer) {
+        HDWP next = DeferWindowPos(g_defer, hWnd, NULL, x, y, w, h,
+                                   SWP_NOZORDER | SWP_NOACTIVATE);
+        if (next) { g_defer = next; return; }
+
+        /*
+         * A failed DeferWindowPos frees the batch, so the handle must not be
+         * used again. Whatever it already held stays where it was; the next
+         * layout pass moves it, because Place only skips windows that are
+         * genuinely in the right place.
+         */
+        g_defer = NULL;
+    }
+    SetWindowPos(hWnd, NULL, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+static void BeginPlacing(int count) {
+    if (g_defer || count <= 0) return;
+    g_defer = BeginDeferWindowPos(count);
+}
+
+static void EndPlacing(void) {
+    HDWP defer = g_defer;
+    g_defer = NULL;
+    if (defer) EndDeferWindowPos(defer);
 }
 
 static void ShowRow(const PropControls* row, bool visible) {
@@ -251,6 +298,15 @@ static int FindProp(const char* key) {
     return -1;
 }
 
+/*
+ * Which card a control is sitting on. Owner-drawn shapes are rounded, so the
+ * pixels outside the shape have to be filled with the right ground or the
+ * corners keep whatever was underneath -- which, for a BUTTON, is the system
+ * face colour the class erases with. That was the pale speckling around every
+ * button and switch.
+ */
+static COLORREF GroundFor(HWND ctrl);
+
 /* ─────────────────────────── painting primitives ─────────────────── */
 
 static ARGB ToArgb(COLORREF c, BYTE alpha) {
@@ -259,14 +315,35 @@ static ARGB ToArgb(COLORREF c, BYTE alpha) {
 }
 
 /*
+ * Making a GDI+ Graphics from an HDC costs far more than the drawing that
+ * follows it, and a single window paint draws a dozen rounded rectangles. One
+ * Graphics is opened for the duration of a paint and every shape shares it.
+ */
+static GpGraphics* g_gfx = NULL;
+
+static void OpenGraphics(HDC hdc) {
+    if (g_gfx) return;
+    if (GdipCreateFromHDC(hdc, &g_gfx) != 0) g_gfx = NULL;
+    if (g_gfx) GdipSetSmoothingMode(g_gfx, SmoothingModeAntiAlias);
+}
+
+static void CloseGraphics(void) {
+    if (g_gfx) GdipDeleteGraphics(g_gfx);
+    g_gfx = NULL;
+}
+
+/*
  * Rounded rectangles go through GDI+ purely for the antialiasing; GDI's
  * RoundRect leaves stair-stepped corners that undo the point of the shape.
  */
 static void FillRounded(HDC hdc, const RECT* rc, int radius, COLORREF fill,
                         COLORREF border, bool hasBorder) {
-    GpGraphics* gfx = NULL;
-    if (GdipCreateFromHDC(hdc, &gfx) != 0 || !gfx) return;
-    GdipSetSmoothingMode(gfx, SmoothingModeAntiAlias);
+    GpGraphics* gfx = g_gfx;
+    bool shared = (gfx != NULL);
+    if (!shared) {
+        if (GdipCreateFromHDC(hdc, &gfx) != 0 || !gfx) return;
+        GdipSetSmoothingMode(gfx, SmoothingModeAntiAlias);
+    }
 
     float x = (float)rc->left, y = (float)rc->top;
     float w = (float)(rc->right - rc->left), h = (float)(rc->bottom - rc->top);
@@ -286,7 +363,10 @@ static void FillRounded(HDC hdc, const RECT* rc, int radius, COLORREF fill,
         }
         GdipDeletePath(path);
     }
-    GdipDeleteGraphics(gfx);
+
+    /* GDI+ batches; GDI does not. Land the shape before any text goes over it. */
+    if (shared) GdipFlush(gfx, FlushIntentionSync);
+    else        GdipDeleteGraphics(gfx);
 }
 
 static void DrawLabel(HDC hdc, const RECT* rc, const char* text, COLORREF color,
@@ -523,6 +603,43 @@ static void CurrentPresetName(const Entry* entry, char* out, int cap) {
     out[cap - 1] = '\0';
 }
 
+/*
+ * Drawing each family in its own face means a font per visible row, and the
+ * font list repaints on every mouse move. Creating them each time made
+ * scrolling the list crawl; a dozen live handles is a fair trade.
+ */
+#define FACE_CACHE 24
+
+static struct { char name[LF_FACESIZE]; HFONT font; } g_faces[FACE_CACHE];
+static int g_faceCount = 0;
+
+static HFONT PreviewFont(const char* face) {
+    for (int i = 0; i < g_faceCount; i++)
+        if (strcmp(g_faces[i].name, face) == 0) return g_faces[i].font;
+
+    HFONT font = CreateFontA(-MulDiv(11, g_dpi, 72), 0, 0, 0, FW_NORMAL, 0, 0, 0,
+                             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                             CLEARTYPE_QUALITY, DEFAULT_PITCH, face);
+    if (!font) return g_font;
+
+    /* Full is rare: it means a list longer than a screen was scrolled twice. */
+    if (g_faceCount == FACE_CACHE) {
+        DeleteObject(g_faces[0].font);
+        memmove(&g_faces[0], &g_faces[1], sizeof(g_faces[0]) * (FACE_CACHE - 1));
+        g_faceCount--;
+    }
+    strncpy(g_faces[g_faceCount].name, face, LF_FACESIZE - 1);
+    g_faces[g_faceCount].name[LF_FACESIZE - 1] = '\0';
+    g_faces[g_faceCount].font = font;
+    g_faceCount++;
+    return font;
+}
+
+static void ClearFaceCache(void) {
+    for (int i = 0; i < g_faceCount; i++) DeleteObject(g_faces[i].font);
+    g_faceCount = 0;
+}
+
 /* ─────────────────────────── the dropdown popup ───────────────────── */
 
 #define MENU_CLASS "LiteWidgetsMenu"
@@ -551,7 +668,7 @@ static void CloseMenu(bool commit, int pick) {
 
     if (commit && prop >= 0 && pick >= 0 && pick < g_choice[prop].count) {
         g_choice[prop].selected = pick;
-        InvalidateRect(g_controls[prop].ctrl, NULL, TRUE);
+        InvalidateRect(g_controls[prop].ctrl, NULL, FALSE);
         OnChoiceChanged(prop);
     }
 }
@@ -579,17 +696,10 @@ static void MenuPaint(HWND hWnd, HDC hdc) {
         label.left += Scale(10);
         label.right -= Scale(8);
 
-        HFONT font = g_font;
-        HFONT face = NULL;
-        if (choice->font_preview && i > 0) {
-            face = CreateFontA(-MulDiv(11, g_dpi, 72), 0, 0, 0, FW_NORMAL, 0, 0, 0,
-                               DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                               CLEARTYPE_QUALITY, DEFAULT_PITCH, choice->items[i]);
-            if (face) font = face;
-        }
+        HFONT font = (choice->font_preview && i > 0)
+                   ? PreviewFont(choice->items[i]) : g_font;
         DrawLabel(hdc, &label, choice->items[i], hot ? g_theme.on_accent : g_theme.text,
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS, font);
-        if (face) DeleteObject(face);
 
         y += rowH;
     }
@@ -642,7 +752,9 @@ static LRESULT CALLBACK MenuProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPar
             HBITMAP surface = CreateCompatibleBitmap(hdc, client.right, client.bottom);
             HBITMAP old = (HBITMAP)SelectObject(buffer, surface);
 
+            OpenGraphics(buffer);
             MenuPaint(hWnd, buffer);
+            CloseGraphics();
             BitBlt(hdc, 0, 0, client.right, client.bottom, buffer, 0, 0, SRCCOPY);
 
             SelectObject(buffer, old);
@@ -762,6 +874,10 @@ static void DrawChoiceField(const DRAWITEMSTRUCT* item, int index) {
     const Choice* choice = &g_choice[index];
     bool open = (g_menu && g_menuProp == index);
 
+    HBRUSH ground = CreateSolidBrush(GroundFor(item->hwndItem));
+    FillRect(item->hDC, &item->rcItem, ground);
+    DeleteObject(ground);
+
     FillRounded(item->hDC, &item->rcItem, Scale(6),
                 open ? g_theme.field_hot : g_theme.field,
                 open ? g_theme.accent : g_theme.line, true);
@@ -773,17 +889,10 @@ static void DrawChoiceField(const DRAWITEMSTRUCT* item, int index) {
     label.left += Scale(10);
     label.right -= Scale(26);
 
-    HFONT font = g_font;
-    HFONT face = NULL;
-    if (choice->font_preview && choice->selected > 0) {
-        face = CreateFontA(-MulDiv(11, g_dpi, 72), 0, 0, 0, FW_NORMAL, 0, 0, 0,
-                           DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                           CLEARTYPE_QUALITY, DEFAULT_PITCH, text);
-        if (face) font = face;
-    }
+    HFONT font = (choice->font_preview && choice->selected > 0)
+               ? PreviewFont(text) : g_font;
     DrawLabel(item->hDC, &label, text, g_theme.text,
               DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS, font);
-    if (face) DeleteObject(face);
 
     /* A chevron, drawn rather than typed: the glyph fonts disagree on it. */
     int cx = item->rcItem.right - Scale(15);
@@ -811,9 +920,9 @@ static void SyncColorRow(int index) {
     ARGB color = RowColor(index);
     if (g_controls[index].slider) {
         SetWindowLongPtrA(g_controls[index].slider, GWLP_USERDATA, (LONG_PTR)((color >> 24) & 0xFF));
-        InvalidateRect(g_controls[index].slider, NULL, TRUE);
+        InvalidateRect(g_controls[index].slider, NULL, FALSE);
     }
-    if (g_controls[index].swatch) InvalidateRect(g_controls[index].swatch, NULL, TRUE);
+    if (g_controls[index].swatch) InvalidateRect(g_controls[index].swatch, NULL, FALSE);
 }
 
 static void SetRowColor(int index, ARGB color) {
@@ -861,7 +970,7 @@ static void SliderPaint(HWND hWnd, HDC hdc) {
     RECT rc;
     GetClientRect(hWnd, &rc);
 
-    HBRUSH back = CreateSolidBrush(g_theme.surface);
+    HBRUSH back = CreateSolidBrush(GroundFor(hWnd));
     FillRect(hdc, &rc, back);
     DeleteObject(back);
 
@@ -912,7 +1021,22 @@ static LRESULT CALLBACK SliderProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lP
         case WM_PAINT: {
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hWnd, &ps);
-            SliderPaint(hWnd, hdc);
+
+            RECT client;
+            GetClientRect(hWnd, &client);
+            HDC buffer = CreateCompatibleDC(hdc);
+            HBITMAP surface = CreateCompatibleBitmap(hdc, client.right, client.bottom);
+            HBITMAP old = (HBITMAP)SelectObject(buffer, surface);
+
+            /* Dragging the handle repaints continuously; buffer it. */
+            OpenGraphics(buffer);
+            SliderPaint(hWnd, buffer);
+            CloseGraphics();
+            BitBlt(hdc, 0, 0, client.right, client.bottom, buffer, 0, 0, SRCCOPY);
+
+            SelectObject(buffer, old);
+            DeleteObject(surface);
+            DeleteDC(buffer);
             EndPaint(hWnd, &ps);
             return 0;
         }
@@ -967,7 +1091,7 @@ static bool ToggleState(HWND button) {
 
 static void SetToggle(HWND button, bool on) {
     SetWindowLongPtrA(button, GWLP_USERDATA, on ? 1 : 0);
-    InvalidateRect(button, NULL, TRUE);
+    InvalidateRect(button, NULL, FALSE);
 }
 
 static void ReadControl(int index, char* out, int cap) {
@@ -1000,7 +1124,7 @@ static void WriteControl(int index, const char* value, const char* preset) {
         case PK_ENUM:
         case PK_FONT:
             ChoiceSelect(&g_choice[index], effective);
-            InvalidateRect(ctrl, NULL, TRUE);
+            InvalidateRect(ctrl, NULL, FALSE);
             break;
         case PK_BOOL:
             SetToggle(ctrl, Style_ParseBool(effective, false));
@@ -1177,14 +1301,24 @@ static LRESULT CALLBACK PreviewProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM l
 
 static void LayoutWindow(void);
 
+/*
+ * Renaming a widget rebuilds the list on every keystroke, and a listbox that
+ * is emptied and refilled in view flickers hard. Hold its painting until the
+ * new contents are in place.
+ */
 static void RefreshList(void) {
     int top = (int)SendMessageA(g_list, LB_GETTOPINDEX, 0, 0);
+
+    SendMessageA(g_list, WM_SETREDRAW, FALSE, 0);
     SendMessageA(g_list, LB_RESETCONTENT, 0, 0);
     for (int i = 0; i < g_count; i++)
         SendMessageA(g_list, LB_ADDSTRING, 0, (LPARAM)g_entries[i].section);
     if (g_selected >= 0 && g_selected < g_count)
         SendMessageA(g_list, LB_SETCURSEL, g_selected, 0);
     SendMessageA(g_list, LB_SETTOPINDEX, top, 0);
+    SendMessageA(g_list, WM_SETREDRAW, TRUE, 0);
+
+    InvalidateRect(g_list, NULL, FALSE);
 }
 
 /* ─────────────────────────── pages and layout ─────────────────────── */
@@ -1205,6 +1339,23 @@ static void RebuildPages(int type) {
     g_activePage = 0;
     for (int i = 0; i < g_pageCount; i++)
         if (g_pages[i] == previous) { g_activePage = i; break; }
+
+    /*
+     * Pill widths only change with the page set, and measuring them needs a
+     * DC. Doing it here keeps GetDC out of the paint path, which runs on
+     * every hover.
+     */
+    HDC hdc = GetDC(g_window);
+    if (!hdc) return;
+    HFONT old = (HFONT)SelectObject(hdc, g_fontBold);
+    for (int i = 0; i < g_pageCount; i++) {
+        const char* name = Spec_GroupName(g_pages[i]);
+        SIZE size = { 0, 0 };
+        GetTextExtentPoint32A(hdc, name, (int)strlen(name), &size);
+        g_pageWidth[i] = size.cx + Scale(26);
+    }
+    SelectObject(hdc, old);
+    ReleaseDC(g_window, hdc);
 }
 
 /* Flow the category pills across the top, wrapping when they run out of room. */
@@ -1213,15 +1364,8 @@ static void LayoutPills(int left, int right, int top) {
     int height = Scale(28);
     int x = left, y = top, rows = 1;
 
-    HDC hdc = GetDC(g_window);
-    HFONT old = (HFONT)SelectObject(hdc, g_fontBold);
-
     for (int i = 0; i < g_pageCount; i++) {
-        const char* name = Spec_GroupName(g_pages[i]);
-        SIZE size = { 0, 0 };
-        GetTextExtentPoint32A(hdc, name, (int)strlen(name), &size);
-        int w = size.cx + Scale(26);
-
+        int w = g_pageWidth[i];
         if (x + w > right && x > left) {
             x = left;
             y += height + gap;
@@ -1230,14 +1374,54 @@ static void LayoutPills(int left, int right, int top) {
         SetRect(&g_pageRects[i], x, y, x + w, y + height);
         x += w + gap;
     }
-
-    SelectObject(hdc, old);
-    ReleaseDC(g_window, hdc);
     g_pillRows = rows;
 }
 
 static int PillsHeight(void) {
     return g_pillRows * Scale(28) + (g_pillRows - 1) * Scale(6);
+}
+
+static bool RowIsVisible(int i, int activeGroup, int type) {
+    return g_props[i].group == activeGroup && Spec_PropAppliesTo(&g_props[i], type);
+}
+
+/* How wide the control half of a row is, given the pane it has to fit in. */
+static int PaneFieldWidth(void) {
+    RECT pane;
+    GetClientRect(g_pane, &pane);
+    int width = pane.right - (PANE_PAD + PANE_LABEL_W) - PANE_PAD - Scale(4);
+    return width < Scale(120) ? Scale(120) : width;
+}
+
+/*
+ * Three things share a colour row, and the pane is narrow whenever the window
+ * is. The value field keeps room for all eight hex digits first; the slider
+ * takes what is left, and stands down entirely rather than hanging off the
+ * edge -- alpha is still the first two digits of the value beside it.
+ */
+static int ColorSliderWidth(int fieldW) {
+    int room = fieldW - Scale(30) - Scale(8) * 2;
+    int width = Scale(96);
+    if (room - width < Scale(96)) width = room - Scale(96);
+    return width < Scale(56) ? 0 : width;
+}
+
+/*
+ * Show and hide before any placing starts: ShowWindow on a control that has a
+ * deferred move pending is undefined, and the pane's rows are placed in one
+ * deferred batch.
+ */
+static void UpdateRowVisibility(void) {
+    int activeGroup = (g_activePage < g_pageCount) ? g_pages[g_activePage] : -1;
+    int type = SelectedType();
+    bool alphaFits = ColorSliderWidth(PaneFieldWidth()) > 0;
+
+    for (int i = 0; i < g_propCount; i++) {
+        bool visible = RowIsVisible(i, activeGroup, type);
+        ShowRow(&g_controls[i], visible);
+        if (visible && g_props[i].kind == PK_COLOR && !alphaFits)
+            ShowWindow(g_controls[i].slider, SW_HIDE);
+    }
 }
 
 /*
@@ -1248,13 +1432,12 @@ static int LayoutRows(void) {
     RECT pane;
     GetClientRect(g_pane, &pane);
 
-    int pad     = Scale(16);
+    int pad     = PANE_PAD;
     int rowH    = Scale(34);
     int ctrlH   = Scale(26);
-    int labelW  = Scale(120);
+    int labelW  = PANE_LABEL_W;
     int fieldX  = pad + labelW;
-    int fieldW  = pane.right - fieldX - pad - Scale(4);
-    if (fieldW < Scale(120)) fieldW = Scale(120);
+    int fieldW  = PaneFieldWidth();
 
     int activeGroup = (g_activePage < g_pageCount) ? g_pages[g_activePage] : -1;
     int type = SelectedType();
@@ -1262,10 +1445,7 @@ static int LayoutRows(void) {
     int total = Scale(16);
 
     for (int i = 0; i < g_propCount; i++) {
-        bool visible = (g_props[i].group == activeGroup)
-                    && Spec_PropAppliesTo(&g_props[i], type);
-        ShowRow(&g_controls[i], visible);
-        if (!visible) continue;
+        if (!RowIsVisible(i, activeGroup, type)) continue;
 
         int top = y + (rowH - ctrlH) / 2;
         Place(g_controls[i].label, pad, y + (rowH - Scale(18)) / 2, labelW - Scale(10), Scale(18));
@@ -1273,14 +1453,17 @@ static int LayoutRows(void) {
         switch (g_props[i].kind) {
             case PK_COLOR: {
                 int swatchW = Scale(30);
-                int sliderW = Scale(96);
-                int editW = fieldW - swatchW - sliderW - Scale(16);
+                int gap     = Scale(8);
+                int sliderW = ColorSliderWidth(fieldW);
+                int editW   = fieldW - swatchW - gap - (sliderW ? sliderW + gap : 0);
                 if (editW < Scale(60)) editW = Scale(60);
+
                 Place(g_controls[i].swatch, fieldX, top, swatchW, ctrlH);
-                Place(g_controls[i].ctrl, fieldX + swatchW + Scale(8) + Scale(9), top + Scale(4),
+                Place(g_controls[i].ctrl, fieldX + swatchW + gap + Scale(9), top + Scale(4),
                       editW - Scale(18), ctrlH - Scale(8));
-                Place(g_controls[i].slider, fieldX + swatchW + editW + Scale(16), top,
-                      sliderW, ctrlH);
+                if (sliderW > 0)
+                    Place(g_controls[i].slider, fieldX + swatchW + gap + editW + gap, top,
+                          sliderW, ctrlH);
                 break;
             }
             case PK_FILE: {
@@ -1354,10 +1537,18 @@ static void UpdateScroll(void) {
 }
 
 static void RelayoutPane(void) {
+    UpdateRowVisibility();
+    /*
+     * Two passes: the first learns how tall the rows are, which is what the
+     * scroll clamp needs, and the second lays them out at the settled offset.
+     * Both go through one deferred batch, so the pane moves in a single step.
+     */
+    BeginPlacing(MAX_PROPS * 4);
     g_paneHeight = LayoutRows();
     UpdateScroll();
     g_paneHeight = LayoutRows();
-    InvalidateRect(g_pane, NULL, TRUE);
+    EndPlacing();
+    InvalidateRect(g_pane, NULL, FALSE);
 }
 
 static void ScrollPaneTo(int position) {
@@ -1372,9 +1563,12 @@ static void ScrollPaneTo(int position) {
     if (position == g_scrollY) return;
 
     g_scrollY = position;
+    UpdateRowVisibility();
+    BeginPlacing(MAX_PROPS * 4);
     LayoutRows();
     UpdateScroll();
-    InvalidateRect(g_pane, NULL, TRUE);
+    EndPlacing();
+    InvalidateRect(g_pane, NULL, FALSE);
 }
 
 /* ─────────────────────────── selection ─────────────────────────── */
@@ -1493,6 +1687,52 @@ static void ApplyPresetToControls(const char* name) {
 
 /* ─────────────────────────── owner drawing ─────────────────────────── */
 
+/*
+ * Every owner-drawn control lays down a ground, then a rounded shape, then
+ * text -- three passes the eye can follow if they land on the screen one at a
+ * time. Redirect the item to a bitmap and blit it once instead. The item rect
+ * is moved to the origin so the painters below can keep using it unchanged.
+ */
+typedef struct {
+    HDC     target;
+    HDC     buffer;
+    HBITMAP surface;
+    HBITMAP previous;
+    RECT    rect;
+} ItemBuffer;
+
+static bool BeginItem(ItemBuffer* b, DRAWITEMSTRUCT* item) {
+    b->rect = item->rcItem;
+    int w = b->rect.right - b->rect.left;
+    int h = b->rect.bottom - b->rect.top;
+    if (w <= 0 || h <= 0) return false;
+
+    b->target = item->hDC;
+    b->buffer = CreateCompatibleDC(b->target);
+    if (!b->buffer) return false;
+
+    b->surface = CreateCompatibleBitmap(b->target, w, h);
+    if (!b->surface) { DeleteDC(b->buffer); return false; }
+
+    b->previous = (HBITMAP)SelectObject(b->buffer, b->surface);
+    item->hDC = b->buffer;
+    SetRect(&item->rcItem, 0, 0, w, h);
+    return true;
+}
+
+static void EndItem(ItemBuffer* b, DRAWITEMSTRUCT* item) {
+    BitBlt(b->target, b->rect.left, b->rect.top,
+           b->rect.right - b->rect.left, b->rect.bottom - b->rect.top,
+           b->buffer, 0, 0, SRCCOPY);
+
+    SelectObject(b->buffer, b->previous);
+    DeleteObject(b->surface);
+    DeleteDC(b->buffer);
+
+    item->hDC = b->target;
+    item->rcItem = b->rect;
+}
+
 static void DrawPushButton(const DRAWITEMSTRUCT* item, bool primary) {
     char text[64] = { 0 };
     GetWindowTextA(item->hwndItem, text, sizeof(text));
@@ -1508,6 +1748,10 @@ static void DrawPushButton(const DRAWITEMSTRUCT* item, bool primary) {
         fill = pressed ? g_theme.field_hot : g_theme.field;
         ink  = g_theme.text;
     }
+
+    HBRUSH ground = CreateSolidBrush(GroundFor(item->hwndItem));
+    FillRect(item->hDC, &item->rcItem, ground);
+    DeleteObject(ground);
 
     FillRounded(item->hDC, &item->rcItem, Scale(6), fill, g_theme.line, !primary);
     DrawLabel(item->hDC, &item->rcItem, text, ink,
@@ -1525,7 +1769,7 @@ static void DrawToggle(const DRAWITEMSTRUCT* item) {
                    rc.left + width, 0 };
     track.bottom = track.top + height;
 
-    HBRUSH back = CreateSolidBrush(g_theme.surface);
+    HBRUSH back = CreateSolidBrush(GroundFor(item->hwndItem));
     FillRect(item->hDC, &rc, back);
     DeleteObject(back);
 
@@ -1546,7 +1790,7 @@ static void DrawSwatch(const DRAWITEMSTRUCT* item, int index) {
     ARGB color = RowColor(index);
     RECT rc = item->rcItem;
 
-    HBRUSH back = CreateSolidBrush(g_theme.surface);
+    HBRUSH back = CreateSolidBrush(GroundFor(item->hwndItem));
     FillRect(item->hDC, &rc, back);
     DeleteObject(back);
 
@@ -1565,8 +1809,9 @@ static void DrawSwatch(const DRAWITEMSTRUCT* item, int index) {
     DeleteObject(pale);
     DeleteObject(white);
 
-    GpGraphics* gfx = NULL;
-    if (GdipCreateFromHDC(item->hDC, &gfx) == 0 && gfx) {
+    GpGraphics* gfx = g_gfx;
+    bool shared = (gfx != NULL);
+    if (shared || GdipCreateFromHDC(item->hDC, &gfx) == 0) {
         GdipSetSmoothingMode(gfx, SmoothingModeAntiAlias);
         GpPath* path = Drawing_RoundedPath((float)rc.left + 0.5f, (float)rc.top + 0.5f,
                                            (float)(rc.right - rc.left) - 1.0f,
@@ -1584,7 +1829,8 @@ static void DrawSwatch(const DRAWITEMSTRUCT* item, int index) {
             }
             GdipDeletePath(path);
         }
-        GdipDeleteGraphics(gfx);
+        if (shared) GdipFlush(gfx, FlushIntentionSync);
+        else        GdipDeleteGraphics(gfx);
     }
 }
 
@@ -1597,7 +1843,7 @@ static void DrawListItem(const DRAWITEMSTRUCT* item) {
     bool selected = (item->itemState & ODS_SELECTED) != 0;
     RECT rc = item->rcItem;
 
-    HBRUSH back = CreateSolidBrush(g_theme.surface);
+    HBRUSH back = CreateSolidBrush(GroundFor(item->hwndItem));
     FillRect(item->hDC, &rc, back);
     DeleteObject(back);
 
@@ -1638,9 +1884,15 @@ static void PaintPane(HWND hWnd, HDC hdc) {
     RECT client;
     GetClientRect(hWnd, &client);
 
-    HBRUSH back = CreateSolidBrush(g_theme.surface);
+    /*
+     * The pane covers its card exactly, so it draws the card. Filling a plain
+     * rectangle here left the one square-cornered panel in a window of
+     * rounded ones.
+     */
+    HBRUSH back = CreateSolidBrush(g_theme.window);
     FillRect(hdc, &client, back);
     DeleteObject(back);
+    FillRounded(hdc, &client, Scale(10), g_theme.surface, g_theme.line, true);
 
     for (int i = 0; i < g_propCount; i++) {
         HWND ctrl = g_controls[i].ctrl;
@@ -1677,8 +1929,13 @@ static LRESULT CALLBACK PaneProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPar
             HBITMAP surface = CreateCompatibleBitmap(hdc, client.right, client.bottom);
             HBITMAP old = (HBITMAP)SelectObject(buffer, surface);
 
+            OpenGraphics(buffer);
             PaintPane(hWnd, buffer);
-            BitBlt(hdc, 0, 0, client.right, client.bottom, buffer, 0, 0, SRCCOPY);
+            CloseGraphics();
+            BitBlt(hdc, ps.rcPaint.left, ps.rcPaint.top,
+                   ps.rcPaint.right - ps.rcPaint.left,
+                   ps.rcPaint.bottom - ps.rcPaint.top,
+                   buffer, ps.rcPaint.left, ps.rcPaint.top, SRCCOPY);
 
             SelectObject(buffer, old);
             DeleteObject(surface);
@@ -1733,6 +1990,7 @@ static LRESULT CALLBACK PaneProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPar
         case WM_CTLCOLOREDIT:
         case WM_CTLCOLORSTATIC:
         case WM_CTLCOLORLISTBOX:
+        case WM_CTLCOLORBTN:
             return SendMessageA(g_window, msg, wParam, lParam);
     }
     return DefWindowProcA(hWnd, msg, wParam, lParam);
@@ -1822,10 +2080,12 @@ static void CreateChrome(void) {
 
     g_name = Make("EDIT", "", ES_AUTOHSCROLL | WS_TABSTOP, 0, g_window, IDC_NAME);
 
-    g_pane = CreateWindowExA(0, PANE_CLASS, "", WS_CHILD | WS_VISIBLE,
+    g_pane = CreateWindowExA(0, PANE_CLASS, "",
+                             WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
                              0, 0, 10, 10, g_window, (HMENU)IDC_PANE, g_instance, NULL);
 
-    g_preview = CreateWindowExA(0, "LiteWidgetsPreview", "", WS_CHILD | WS_VISIBLE,
+    g_preview = CreateWindowExA(0, "LiteWidgetsPreview", "",
+                                WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
                                 0, 0, 10, 10, g_window, (HMENU)IDC_PREVIEW, g_instance, NULL);
 
     g_arrange = Make("BUTTON", "Arrange on desktop", BS_OWNERDRAW | WS_TABSTOP, 0,
@@ -1837,6 +2097,9 @@ static void CreateChrome(void) {
 /* ─────────────────────────── window layout ─────────────────────────── */
 
 typedef struct { RECT sidebar, header, pane, preview, footer; } Frame;
+
+/* The last frame computed, so a control can ask which card it landed on. */
+static Frame g_frame;
 
 static Frame ComputeFrame(int width, int height) {
     Frame f;
@@ -1862,13 +2125,31 @@ static Frame ComputeFrame(int width, int height) {
     SetRect(&f.pane, contentLeft, f.header.bottom + Scale(12) + PillsHeight() + Scale(12),
             contentRight, height - footer);
     SetRect(&f.footer, pad, height - footer, width - pad, height - pad);
+    g_frame = f;
     return f;
+}
+
+/*
+ * Everything inside the pane or the sidebar card sits on `surface`; the footer
+ * and the gaps between cards are the window ground. Cheap enough to ask per
+ * paint because it reads the frame the last layout left behind.
+ */
+static COLORREF GroundFor(HWND ctrl) {
+    if (!ctrl || !g_window) return g_theme.window;
+    if (GetParent(ctrl) == g_pane) return g_theme.surface;
+
+    RECT rc, hit;
+    GetWindowRect(ctrl, &rc);
+    MapWindowPoints(NULL, g_window, (POINT*)&rc, 2);
+    return IntersectRect(&hit, &rc, &g_frame.sidebar) ? g_theme.surface : g_theme.window;
 }
 
 static void LayoutWindow(void) {
     RECT client;
     GetClientRect(g_window, &client);
     Frame f = ComputeFrame(client.right, client.bottom);
+
+    BeginPlacing(12);
 
     int pad = Scale(10);
     int buttonH = Scale(30);
@@ -1901,71 +2182,91 @@ static void LayoutWindow(void) {
     Place(GetDlgItem(g_window, IDC_APPLY), f.footer.right - Scale(210), fy, Scale(96), Scale(32));
     Place(GetDlgItem(g_window, IDC_CLOSE), f.footer.right - Scale(104), fy, Scale(96), Scale(32));
 
+    EndPlacing();
     RelayoutPane();
-    InvalidateRect(g_window, NULL, TRUE);
+    InvalidateRect(g_window, NULL, FALSE);
 }
 
 /* Pills are drawn straight onto the window; only their rects are stored. */
-static void PaintPills(HDC hdc) {
-    for (int i = 0; i < g_pageCount; i++) {
-        bool active = (i == g_activePage);
-        bool hot = (i == g_hotPage);
-        COLORREF fill = active ? g_theme.accent : (hot ? g_theme.field_hot : g_theme.field);
-        COLORREF ink  = active ? g_theme.on_accent : g_theme.text;
+static void PaintPill(HDC hdc, int i) {
+    bool active = (i == g_activePage);
+    bool hot = (i == g_hotPage);
+    COLORREF fill = active ? g_theme.accent : (hot ? g_theme.field_hot : g_theme.field);
+    COLORREF ink  = active ? g_theme.on_accent : g_theme.text;
 
-        FillRounded(hdc, &g_pageRects[i], (g_pageRects[i].bottom - g_pageRects[i].top) / 2,
-                    fill, g_theme.line, !active);
-        DrawLabel(hdc, &g_pageRects[i], Spec_GroupName(g_pages[i]), ink,
-                  DT_CENTER | DT_VCENTER | DT_SINGLELINE, active ? g_fontBold : g_font);
-    }
+    FillRounded(hdc, &g_pageRects[i], (g_pageRects[i].bottom - g_pageRects[i].top) / 2,
+                fill, g_theme.line, !active);
+    DrawLabel(hdc, &g_pageRects[i], Spec_GroupName(g_pages[i]), ink,
+              DT_CENTER | DT_VCENTER | DT_SINGLELINE, active ? g_fontBold : g_font);
 }
 
-static void PaintWindow(HDC hdc) {
+/* Does this piece of the window fall inside what actually needs repainting? */
+static bool Touches(const RECT* dirty, const RECT* part) {
+    RECT hit;
+    return IntersectRect(&hit, dirty, part) != 0;
+}
+
+/*
+ * Hovering a pill dirties that pill and nothing else, so the rest of the
+ * window is skipped rather than redrawn behind the same blit.
+ */
+static void PaintWindow(HDC hdc, const RECT* dirty) {
     RECT client;
     GetClientRect(g_window, &client);
     Frame f = ComputeFrame(client.right, client.bottom);
 
     HBRUSH back = CreateSolidBrush(g_theme.window);
-    FillRect(hdc, &client, back);
+    FillRect(hdc, dirty, back);
     DeleteObject(back);
 
-    FillRounded(hdc, &f.sidebar, Scale(10), g_theme.surface, g_theme.line, true);
-    FillRounded(hdc, &f.header,  Scale(10), g_theme.surface, g_theme.line, true);
-    FillRounded(hdc, &f.preview, Scale(10), g_theme.surface, g_theme.line, true);
+    if (Touches(dirty, &f.sidebar)) {
+        FillRounded(hdc, &f.sidebar, Scale(10), g_theme.surface, g_theme.line, true);
+        RECT title = { f.sidebar.left + Scale(14), f.sidebar.top + Scale(12),
+                       f.sidebar.right - Scale(10), f.sidebar.top + Scale(30) };
+        DrawLabel(hdc, &title, "WIDGETS", g_theme.dim,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE, g_fontSmall);
+    }
 
-    FillRounded(hdc, &f.pane, Scale(10), g_theme.surface, g_theme.line, true);
+    if (Touches(dirty, &f.header)) {
+        FillRounded(hdc, &f.header, Scale(10), g_theme.surface, g_theme.line, true);
 
-    RECT title = { f.sidebar.left + Scale(14), f.sidebar.top + Scale(12),
-                   f.sidebar.right - Scale(10), f.sidebar.top + Scale(30) };
-    DrawLabel(hdc, &title, "WIDGETS", g_theme.dim, DT_LEFT | DT_VCENTER | DT_SINGLELINE,
-              g_fontSmall);
+        RECT nameLabel = { f.header.left + Scale(16), f.header.top + Scale(8),
+                           f.header.right - Scale(10), f.header.top + Scale(22) };
+        DrawLabel(hdc, &nameLabel, "SECTION NAME", g_theme.dim,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE, g_fontSmall);
 
-    RECT nameLabel = { f.header.left + Scale(16), f.header.top + Scale(8),
-                       f.header.right - Scale(10), f.header.top + Scale(22) };
-    DrawLabel(hdc, &nameLabel, "SECTION NAME", g_theme.dim,
-              DT_LEFT | DT_VCENTER | DT_SINGLELINE, g_fontSmall);
+        /* The name box shares the pane's field styling. */
+        RECT nameField;
+        GetWindowRect(g_name, &nameField);
+        MapWindowPoints(NULL, g_window, (POINT*)&nameField, 2);
+        InflateRect(&nameField, Scale(9), Scale(4));
+        FillRounded(hdc, &nameField, Scale(6), g_theme.field, g_theme.line, true);
+    }
 
-    /* The name box shares the pane's field styling. */
-    RECT nameField;
-    GetWindowRect(g_name, &nameField);
-    MapWindowPoints(NULL, g_window, (POINT*)&nameField, 2);
-    InflateRect(&nameField, Scale(9), Scale(4));
-    FillRounded(hdc, &nameField, Scale(6), g_theme.field, g_theme.line, true);
+    if (Touches(dirty, &f.preview)) {
+        FillRounded(hdc, &f.preview, Scale(10), g_theme.surface, g_theme.line, true);
 
-    RECT previewTitle = { f.preview.left + Scale(14), f.preview.top + Scale(12),
-                          f.preview.right - Scale(10), f.preview.top + Scale(30) };
-    DrawLabel(hdc, &previewTitle, "LIVE PREVIEW", g_theme.dim,
-              DT_LEFT | DT_VCENTER | DT_SINGLELINE, g_fontSmall);
+        RECT previewTitle = { f.preview.left + Scale(14), f.preview.top + Scale(12),
+                              f.preview.right - Scale(10), f.preview.top + Scale(30) };
+        DrawLabel(hdc, &previewTitle, "LIVE PREVIEW", g_theme.dim,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE, g_fontSmall);
 
-    RECT note = { f.preview.left + Scale(14), f.preview.bottom - Scale(96),
-                  f.preview.right - Scale(14), f.preview.bottom - Scale(10) };
-    DrawLabel(hdc, &note,
-              "Colours are AARRGGBB, and the slider beside one sets its alpha.\r\n"
-              "Arrange on desktop drags widgets where they will live, snapping to "
-              "an 8px grid; hold Shift for finer control.",
-              g_theme.dim, DT_LEFT | DT_WORDBREAK, g_fontSmall);
+        RECT note = { f.preview.left + Scale(14), f.preview.bottom - Scale(96),
+                      f.preview.right - Scale(14), f.preview.bottom - Scale(10) };
+        DrawLabel(hdc, &note,
+                  "Colours are AARRGGBB, and the slider beside one sets its alpha.\r\n"
+                  "Arrange on desktop drags widgets where they will live, snapping to "
+                  "an 8px grid; hold Shift for finer control.",
+                  g_theme.dim, DT_LEFT | DT_WORDBREAK, g_fontSmall);
+    }
 
-    PaintPills(hdc);
+    /* The pane child covers this card and draws it; only the edge around the
+       child ever shows through from here. */
+    if (Touches(dirty, &f.pane))
+        FillRounded(hdc, &f.pane, Scale(10), g_theme.surface, g_theme.line, true);
+
+    for (int i = 0; i < g_pageCount; i++)
+        if (Touches(dirty, &g_pageRects[i])) PaintPill(hdc, i);
 }
 
 /* ─────────────────────────── commands ─────────────────────────── */
@@ -1979,7 +2280,7 @@ static void ApplyChanges(void) {
 
 static void UpdateArrangeButton(void) {
     SetWindowTextA(g_arrange, Widget_EditMode() ? "Finish arranging" : "Arrange on desktop");
-    InvalidateRect(g_arrange, NULL, TRUE);
+    InvalidateRect(g_arrange, NULL, FALSE);
 }
 
 static void ToggleArrange(void) {
@@ -2052,10 +2353,14 @@ static void OnPillClick(int x, int y) {
     for (int i = 0; i < g_pageCount; i++) {
         if (!PtInRect(&g_pageRects[i], pt)) continue;
         if (i == g_activePage) return;
+
+        /* Only the two pills change up here; the pane repaints itself. */
+        int previous = g_activePage;
         g_activePage = i;
         g_scrollY = 0;
         RelayoutPane();
-        InvalidateRect(g_window, NULL, FALSE);
+        InvalidateRect(g_window, &g_pageRects[previous], FALSE);
+        InvalidateRect(g_window, &g_pageRects[i], FALSE);
         return;
     }
 }
@@ -2075,8 +2380,13 @@ static LRESULT CALLBACK SettingsProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM 
             HBITMAP surface = CreateCompatibleBitmap(hdc, client.right, client.bottom);
             HBITMAP old = (HBITMAP)SelectObject(buffer, surface);
 
-            PaintWindow(buffer);
-            BitBlt(hdc, 0, 0, client.right, client.bottom, buffer, 0, 0, SRCCOPY);
+            OpenGraphics(buffer);
+            PaintWindow(buffer, &ps.rcPaint);
+            CloseGraphics();
+            BitBlt(hdc, ps.rcPaint.left, ps.rcPaint.top,
+                   ps.rcPaint.right - ps.rcPaint.left,
+                   ps.rcPaint.bottom - ps.rcPaint.top,
+                   buffer, ps.rcPaint.left, ps.rcPaint.top, SRCCOPY);
 
             SelectObject(buffer, old);
             DeleteObject(surface);
@@ -2100,17 +2410,41 @@ static LRESULT CALLBACK SettingsProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM 
             OnPillClick(LOWORD(lParam), HIWORD(lParam));
             return 0;
 
+        /*
+         * Only the two pills involved change, so only they are repainted.
+         * Invalidating the window instead made every crossing of the pill row
+         * repaint the whole editor.
+         */
         case WM_MOUSEMOVE: {
             POINT pt = { LOWORD(lParam), HIWORD(lParam) };
             int hot = -1;
             for (int i = 0; i < g_pageCount; i++)
                 if (PtInRect(&g_pageRects[i], pt)) { hot = i; break; }
+
             if (hot != g_hotPage) {
+                if (g_hotPage >= 0 && g_hotPage < g_pageCount)
+                    InvalidateRect(hWnd, &g_pageRects[g_hotPage], FALSE);
+                if (hot >= 0) InvalidateRect(hWnd, &g_pageRects[hot], FALSE);
                 g_hotPage = hot;
-                InvalidateRect(hWnd, NULL, FALSE);
             }
+
+            /* Without this the highlight sticks when the pointer leaves. */
+            TRACKMOUSEEVENT track;
+            track.cbSize = sizeof(track);
+            track.dwFlags = TME_LEAVE;
+            track.hwndTrack = hWnd;
+            track.dwHoverTime = 0;
+            TrackMouseEvent(&track);
             return 0;
         }
+
+        case WM_MOUSELEAVE:
+            if (g_hotPage >= 0) {
+                if (g_hotPage < g_pageCount)
+                    InvalidateRect(hWnd, &g_pageRects[g_hotPage], FALSE);
+                g_hotPage = -1;
+            }
+            return 0;
 
         case WM_CTLCOLOREDIT: {
             HDC hdc = (HDC)wParam;
@@ -2120,12 +2454,25 @@ static LRESULT CALLBACK SettingsProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM 
             return (LRESULT)g_brushField;
         }
 
+        /*
+         * The list draws its rows on the sidebar card, so the strip below the
+         * last row has to be that same colour -- with the field brush it read
+         * as a slab of a second background.
+         */
         case WM_CTLCOLORLISTBOX: {
             HDC hdc = (HDC)wParam;
-            SetBkColor(hdc, g_theme.field);
+            SetBkColor(hdc, g_theme.surface);
             SetTextColor(hdc, g_theme.text);
-            return (LRESULT)g_brushField;
+            return (LRESULT)g_brushSurface;
         }
+
+        /*
+         * An owner-drawn BUTTON still erases itself before it asks us to draw,
+         * and with no handler here that erase is the system face colour.
+         */
+        case WM_CTLCOLORBTN:
+            return (LRESULT)(GroundFor((HWND)lParam) == g_theme.surface
+                             ? g_brushSurface : g_brushWindow);
 
         case WM_CTLCOLORSTATIC: {
             HDC hdc = (HDC)wParam;
@@ -2145,23 +2492,28 @@ static LRESULT CALLBACK SettingsProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM 
             DRAWITEMSTRUCT* item = (DRAWITEMSTRUCT*)lParam;
             int id = (int)item->CtlID;
 
-            if (item->CtlType == ODT_LISTBOX) { DrawListItem(item); return TRUE; }
+            ItemBuffer buffer;
+            bool buffered = BeginItem(&buffer, item);
+            OpenGraphics(item->hDC);
 
-            if (id >= PROP_ID_BASE) {
+            if (item->CtlType == ODT_LISTBOX) {
+                DrawListItem(item);
+            } else if (id >= PROP_ID_BASE) {
                 int index = PROP_INDEX(id);
-                if (index < 0 || index >= g_propCount) return TRUE;
-
-                switch (PROP_SUB(id)) {
-                    case SUB_SWATCH: DrawSwatch(item, index); return TRUE;
-                    case SUB_BROWSE: DrawPushButton(item, false); return TRUE;
-                    default: break;
+                if (index >= 0 && index < g_propCount) {
+                    int sub = PROP_SUB(id);
+                    if (sub == SUB_SWATCH)      DrawSwatch(item, index);
+                    else if (sub == SUB_BROWSE) DrawPushButton(item, false);
+                    else if (g_props[index].kind == PK_ENUM
+                          || g_props[index].kind == PK_FONT) DrawChoiceField(item, index);
+                    else                        DrawToggle(item);
                 }
-                int kind = g_props[index].kind;
-                if (kind == PK_ENUM || kind == PK_FONT) DrawChoiceField(item, index);
-                else                                    DrawToggle(item);
-                return TRUE;
+            } else {
+                DrawPushButton(item, id == IDC_APPLY);
             }
-            DrawPushButton(item, id == IDC_APPLY);
+
+            CloseGraphics();
+            if (buffered) EndItem(&buffer, item);
             return TRUE;
         }
 
@@ -2217,6 +2569,7 @@ static LRESULT CALLBACK SettingsProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM 
 
         case WM_DESTROY:
             KillTimer(hWnd, IDT_PREVIEW);
+            ClearFaceCache();
             if (g_font)      { DeleteObject(g_font);      g_font = NULL; }
             if (g_fontBold)  { DeleteObject(g_fontBold);  g_fontBold = NULL; }
             if (g_fontSmall) { DeleteObject(g_fontSmall); g_fontSmall = NULL; }
@@ -2330,7 +2683,9 @@ void Settings_Open(HINSTANCE hInstance, const char* iniPath) {
     int clientH = Scale(700);
 
     RECT frame = { 0, 0, clientW, clientH };
-    DWORD style = WS_OVERLAPPEDWINDOW;
+    /* Children paint themselves; without this the window paints under them
+       first and every repaint is visible as a flash. */
+    DWORD style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
     AdjustWindowRect(&frame, style, FALSE);
 
     int windowW = frame.right - frame.left;

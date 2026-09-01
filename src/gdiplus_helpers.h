@@ -169,6 +169,10 @@ void     WINGDIPAPI GdiplusShutdown(ULONG_PTR token);
 /* ========== Graphics ========== */
 GpStatus WINGDIPAPI GdipCreateFromHDC(HDC hdc, GpGraphics **graphics);
 GpStatus WINGDIPAPI GdipDeleteGraphics(GpGraphics *graphics);
+/* Deleting a Graphics flushes it; a shared one has to be flushed by hand
+   before GDI draws to the same DC, or the two orders disagree. */
+typedef enum { FlushIntentionFlush = 0, FlushIntentionSync = 1 } GpFlushIntention;
+GpStatus WINGDIPAPI GdipFlush(GpGraphics *graphics, GpFlushIntention intention);
 GpStatus WINGDIPAPI GdipGraphicsClear(GpGraphics *graphics, ARGB color);
 GpStatus WINGDIPAPI GdipSetSmoothingMode(GpGraphics *graphics, GpSmoothingMode smoothingMode);
 GpStatus WINGDIPAPI GdipSetTextRenderingHint(GpGraphics *graphics, GpTextRenderingHint mode);

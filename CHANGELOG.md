@@ -35,6 +35,17 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- The settings editor flickered and speckled. Owner-drawn buttons erase
+  themselves with the system face colour before asking us to draw, so every
+  rounded control was ringed with pale corners; the window painted the whole
+  of itself under its own children on every repaint; hovering the category
+  row invalidated the entire window; and each rounded rectangle built and
+  threw away its own GDI+ surface. A full repaint went from 33 ms to 7 ms,
+  and hovering the pills from a whole-window redraw to two pills.
+- Colour rows ran off the edge of a narrow pane -- the value field was
+  clipped to six of its eight hex digits and the alpha slider hung outside
+  the panel. The field now keeps the room it needs and the slider stands
+  down when there is none.
 - Settings options disappeared as you used the editor: property rows were
   siblings of the tab control they overlapped, so a tab repaint painted over
   them, and a page with more rows than fitted ran off the bottom of a window
