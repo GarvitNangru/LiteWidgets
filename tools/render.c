@@ -11,7 +11,9 @@
  * --sheet also writes contact-sheet.png: one tile per built-in style preset.
  */
 
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>

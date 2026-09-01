@@ -4,6 +4,8 @@
 #include "drawing.h"
 #include "layout.h"
 
+#include <shellapi.h>
+
 #include <stdio.h>
 #include <string.h>
 
