@@ -44,6 +44,28 @@ static GpBitmap* NewCanvas(int width, int height, GpGraphics** gfxOut) {
     return bitmap;
 }
 
+/*
+ * CreateDirectory only makes the last component, so an output path like
+ * `artifacts\showcase` fails whenever `artifacts` does not already exist --
+ * which, in CI, is always.
+ */
+static bool EnsureDirectory(const char* path) {
+    char build[MAX_PATH];
+    strncpy(build, path, MAX_PATH - 1);
+    build[MAX_PATH - 1] = '\0';
+
+    for (char* p = build; *p; p++) {
+        if (*p != '\\' && *p != '/') continue;
+        char separator = *p;
+        *p = '\0';
+        if (build[0] && strcmp(build, ".") != 0 && strcmp(build, "..") != 0)
+            CreateDirectoryA(build, NULL);
+        *p = separator;
+    }
+    CreateDirectoryA(build, NULL);
+    return GetFileAttributesA(build) != INVALID_FILE_ATTRIBUTES;
+}
+
 static bool SavePng(GpBitmap* bitmap, const char* path) {
     WCHAR wide[MAX_PATH];
     MultiByteToWideChar(CP_UTF8, 0, path, -1, wide, MAX_PATH);
@@ -151,7 +173,10 @@ int main(int argc, char** argv) {
         fprintf(stderr, "render: cannot open %s\n", iniPath);
         return 1;
     }
-    CreateDirectoryA(outDir, NULL);
+    if (!EnsureDirectory(outDir)) {
+        fprintf(stderr, "render: cannot create %s\n", outDir);
+        return 1;
+    }
 
     ULONG_PTR token = 0;
     GpStartupInput input = { 1, NULL, FALSE, FALSE };
