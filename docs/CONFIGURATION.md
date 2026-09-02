@@ -31,7 +31,7 @@ means "off" for effects such as shadow, glow and outline.
 
 | Key | Applies to | Values | Default | Description |
 | --- | --- | --- | --- | --- |
-| `type` | all | `clock`, `notes`, `image` | `clock` | Which widget to render |
+| `type` | all | `clock`, `notes`, `image`, `gauge`, `calendar` | `clock` | Which widget to render |
 | `enabled` | all | true / false | `true` | Set to false to keep the config but hide the widget |
 | `preset` | all | `midnight`, `glass`, `minimal`, `neon`, `sunset`, `aurora`, `terminal`, `blueprint`, `carbon`, `paper`, `nord`, `mocha`, `dracula`, `gruvbox`, `solarized` | (none) | Applies a themed set of colours; individual keys still win |
 
@@ -43,8 +43,8 @@ means "off" for effects such as shadow, glow and outline.
 | `monitor` | all | integer | `-1` | Monitor index, or -1 for the primary display |
 | `x` | all | integer | `0` | Horizontal offset from the anchor, in pixels |
 | `y` | all | integer | `0` | Vertical offset from the anchor, in pixels |
-| `width` | all | integer | `320` | Widget width in pixels |
-| `height` | all | integer | `140` | Widget height in pixels |
+| `width` | all | integer | `320` | Widget width in pixels; the default varies by type |
+| `height` | all | integer | `140` | Widget height in pixels; the default varies by type |
 | `opacity` | all | number | `1.0` | Master transparency, 0.0 to 1.0 |
 | `click_through` | all | true / false | `true` | Let clicks pass to the desktop underneath; off by default for notes and image, which you interact with |
 | `z_order` | all | `desktop`, `bottom`, `top` | `desktop` | desktop follows the wallpaper, bottom pins to the very back, top floats above all windows |
@@ -65,29 +65,29 @@ means "off" for effects such as shadow, glow and outline.
 
 | Key | Applies to | Values | Default | Description |
 | --- | --- | --- | --- | --- |
-| `font_family` | clock, notes | font name | `Segoe UI` | Font family name |
-| `font_size` | clock, notes | number | `14` | Font size in pixels |
-| `font_style` | clock, notes | `regular`, `bold`, `italic`, `bold_italic` | `regular` | Weight and slant |
-| `text_color` | clock, notes | colour | `FFFFFFFF` | Primary text colour |
-| `text_color2` | clock, notes | colour | `00000000` | Gradient end colour for text |
-| `text_gradient` | clock, notes | `none`, `vertical`, `horizontal`, `diagonal`, `diagonal_back` | `none` | Direction of the text gradient |
-| `letter_spacing` | clock, notes | number | `0` | Extra pixels between glyphs; may be negative |
-| `line_spacing` | clock, notes | number | `1.0` | Line height multiplier |
-| `text_transform` | clock, notes | `none`, `upper`, `lower` | `none` | Force upper or lower case |
-| `align_h` | clock, notes | `left`, `center`, `right` | `center` | Horizontal text alignment |
-| `align_v` | clock, notes | `top`, `center`, `bottom` | `center` | Vertical text alignment |
+| `font_family` | clock, notes, gauge, calendar | font name | `Segoe UI` | Font family name |
+| `font_size` | clock, notes, gauge, calendar | number | `14` | Font size in pixels |
+| `font_style` | clock, notes, gauge, calendar | `regular`, `bold`, `italic`, `bold_italic` | `regular` | Weight and slant |
+| `text_color` | clock, notes, gauge, calendar | colour | `FFFFFFFF` | Primary text colour |
+| `text_color2` | clock, notes, gauge, calendar | colour | `00000000` | Gradient end colour for text |
+| `text_gradient` | clock, notes, gauge, calendar | `none`, `vertical`, `horizontal`, `diagonal`, `diagonal_back` | `none` | Direction of the text gradient |
+| `letter_spacing` | clock, notes, gauge, calendar | number | `0` | Extra pixels between glyphs; may be negative |
+| `line_spacing` | clock, notes, gauge, calendar | number | `1.0` | Line height multiplier |
+| `text_transform` | clock, notes, gauge, calendar | `none`, `upper`, `lower` | `none` | Force upper or lower case |
+| `align_h` | clock, notes, gauge, calendar | `left`, `center`, `right` | `center` | Horizontal text alignment |
+| `align_v` | clock, notes, gauge, calendar | `top`, `center`, `bottom` | `center` | Vertical text alignment |
 
 ## Effects
 
 | Key | Applies to | Values | Default | Description |
 | --- | --- | --- | --- | --- |
-| `shadow_color` | clock, notes | colour | `00000000` | Drop shadow colour; alpha 0 disables it |
-| `shadow_offset_x` | clock, notes | number | `0` | Shadow offset in pixels |
-| `shadow_offset_y` | clock, notes | number | `2` | Shadow offset in pixels |
-| `glow_color` | clock, notes | colour | `00000000` | Glow colour behind the text |
-| `glow_radius` | clock, notes | number | `0` | Glow spread in pixels, 0 for none |
-| `outline_color` | clock, notes | colour | `00000000` | Colour of the glyph outline |
-| `outline_width` | clock, notes | number | `0` | Outline thickness in pixels |
+| `shadow_color` | clock, notes, gauge, calendar | colour | `00000000` | Drop shadow colour; alpha 0 disables it |
+| `shadow_offset_x` | clock, notes, gauge, calendar | number | `0` | Shadow offset in pixels |
+| `shadow_offset_y` | clock, notes, gauge, calendar | number | `2` | Shadow offset in pixels |
+| `glow_color` | clock, notes, gauge, calendar | colour | `00000000` | Glow colour behind the text |
+| `glow_radius` | clock, notes, gauge, calendar | number | `0` | Glow spread in pixels, 0 for none |
+| `outline_color` | clock, notes, gauge, calendar | colour | `00000000` | Colour of the glyph outline |
+| `outline_width` | clock, notes, gauge, calendar | number | `0` | Outline thickness in pixels |
 
 ## Clock
 
@@ -132,6 +132,44 @@ means "off" for effects such as shadow, glow and outline.
 | `hand_scale` | clock | number | `1.0` | Multiplier applied to every hand length |
 | `hub_color` | clock | colour | `00000000` | Centre cap colour |
 | `smooth_seconds` | clock | true / false | `false` | Sweep the second hand; redraws ~20x a second |
+
+## Gauge
+
+| Key | Applies to | Values | Default | Description |
+| --- | --- | --- | --- | --- |
+| `source` | gauge | `cpu`, `memory`, `disk`, `battery` | `cpu` | What the gauge measures |
+| `gauge_style` | gauge | `bar`, `ring`, `number` | `bar` | A track, an arc, or the number on its own |
+| `drive` | gauge | text | `C:` | Which volume the disk reading measures |
+| `label` | gauge | text | (none) | Blank names the gauge after its reading |
+| `show_label` | gauge | true / false | `true` | Draw the label |
+| `show_value` | gauge | true / false | `true` | Draw the percentage |
+| `show_detail` | gauge | true / false | `false` | Add the underlying figures, e.g. 6.1 / 16.0 GB |
+| `fill_color` | gauge | colour | `00000000` | Filled portion; alpha 0 uses the text colour |
+| `fill_color2` | gauge | colour | `00000000` | Gradient end colour for the fill |
+| `fill_gradient` | gauge | `none`, `vertical`, `horizontal`, `diagonal`, `diagonal_back` | `none` | Direction of the fill gradient |
+| `track_color` | gauge | colour | `00000000` | Unfilled portion; alpha 0 derives from the text colour |
+| `thickness` | gauge | number | `8` | Bar height, or ring stroke width, in pixels |
+| `warn_above` | gauge | number | `0` | Recolour the fill past this percentage; 0 never does |
+| `warn_below` | gauge | number | `0` | Recolour the fill under this percentage, for a draining battery |
+| `warn_color` | gauge | colour | `00000000` | Fill colour past the threshold |
+
+## Calendar
+
+| Key | Applies to | Values | Default | Description |
+| --- | --- | --- | --- | --- |
+| `week_start` | calendar | `locale`, `monday`, `sunday` | `locale` | First column of the grid |
+| `show_header` | calendar | true / false | `true` | Draw the month and year line |
+| `header_format` | calendar | text | `MMMM yyyy` | Date pattern for the header line |
+| `show_weekdays` | calendar | true / false | `true` | Draw the row of weekday initials |
+| `show_week_numbers` | calendar | true / false | `false` | Add an ISO week number column |
+| `show_outside_days` | calendar | true / false | `true` | Fill the empty cells with neighbouring days |
+| `day_scale` | calendar | number | `1.0` | Day-number size relative to the font size |
+| `header_color` | calendar | colour | `00000000` | Alpha 0 uses the text colour |
+| `weekday_color` | calendar | colour | `00000000` | Alpha 0 derives 50% of the text colour |
+| `weekend_color` | calendar | colour | `00000000` | Saturday and Sunday numbers |
+| `outside_color` | calendar | colour | `00000000` | Days belonging to the months either side |
+| `today_color` | calendar | colour | `00000000` | Disc drawn behind today |
+| `today_text_color` | calendar | colour | `00000000` | Today's number, drawn on the marker |
 
 ## Source
 

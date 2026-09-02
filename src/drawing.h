@@ -99,6 +99,24 @@ float Drawing_Extent(DrawingMetrics* m, const WCHAR* text, int count);
 /* Baseline-to-baseline distance, with the run's line spacing applied. */
 float Drawing_LineHeight(const DrawingMetrics* m);
 
+/*
+ * A reusable plain-text pen, for widgets that draw many short strings.
+ *
+ * A calendar puts forty-two numbers on the screen. Sending each through
+ * Drawing_Text would rebuild the font family, the font and the string format
+ * every time, and would run the glyph-path pipeline over every cell whenever
+ * a glow or an outline is configured -- which on numbers that small is both
+ * slow and illegible. This keeps one font open and draws straight.
+ */
+typedef struct DrawingFont DrawingFont;
+
+DrawingFont* Drawing_OpenFont(const WCHAR* family, float size, INT style);
+void         Drawing_CloseFont(DrawingFont* f);
+
+/* Draw one string into `box`, aligned with the ALIGN_* constants. */
+void Drawing_Cell(GpGraphics* gfx, DrawingFont* f, const WCHAR* text,
+                  GpRectF box, ARGB color, int alignH, int alignV);
+
 /* Apply a text transform in place. Returns `dst`. */
 WCHAR* Drawing_Transform(WCHAR* dst, size_t cap, const WCHAR* src, int transform);
 

@@ -22,4 +22,15 @@ void TimeFmt_Format(const SYSTEMTIME* st, const WCHAR* pattern, WCHAR* out, size
 /* Refresh cached locale strings; call after WM_SETTINGCHANGE. */
 void TimeFmt_InvalidateLocale(void);
 
+/*
+ * The shortest weekday name the locale offers -- one or two characters in
+ * most languages -- indexed Monday-first, like the rest of this module.
+ * A calendar's header row is the only thing that wants these, but they come
+ * from the same locale cache as everything else.
+ */
+const WCHAR* TimeFmt_ShortestDayName(int mondayIndex);
+
+/* Which day the user's locale starts a week on, 0 = Monday .. 6 = Sunday. */
+int TimeFmt_FirstDayOfWeek(void);
+
 #endif /* TIMEFMT_H */

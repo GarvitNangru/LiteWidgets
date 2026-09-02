@@ -12,6 +12,8 @@ typedef struct {
     bool  loaded;
     WCHAR day[7][48];        /* Monday .. Sunday */
     WCHAR dayShort[7][24];
+    WCHAR dayTiny[7][8];     /* one or two letters, for a calendar header */
+    int   firstDay;          /* 0 = Monday .. 6 = Sunday */
     WCHAR month[12][48];
     WCHAR monthShort[12][24];
     WCHAR am[16];
@@ -36,9 +38,18 @@ static void EnsureLocale(void) {
                                         L"September", L"October", L"November", L"December" };
 
     for (int i = 0; i < 7; i++) {
-        ReadLocale(LOCALE_SDAYNAME1 + i,       g_locale.day[i],      48, fbDay[i]);
-        ReadLocale(LOCALE_SABBREVDAYNAME1 + i, g_locale.dayShort[i], 24, fbDay[i]);
+        ReadLocale(LOCALE_SDAYNAME1 + i,        g_locale.day[i],      48, fbDay[i]);
+        ReadLocale(LOCALE_SABBREVDAYNAME1 + i,  g_locale.dayShort[i], 24, fbDay[i]);
+        ReadLocale(LOCALE_SSHORTESTDAYNAME1 + i, g_locale.dayTiny[i],  8, fbDay[i]);
     }
+
+    /*
+     * LOCALE_IFIRSTDAYOFWEEK is already Monday-based, which is the convention
+     * this module uses everywhere. It comes back as text, not a number.
+     */
+    WCHAR first[8];
+    ReadLocale(LOCALE_IFIRSTDAYOFWEEK, first, 8, L"0");
+    g_locale.firstDay = (first[0] >= L'0' && first[0] <= L'6') ? (first[0] - L'0') : 0;
     for (int i = 0; i < 12; i++) {
         ReadLocale(LOCALE_SMONTHNAME1 + i,       g_locale.month[i],      48, fbMonth[i]);
         ReadLocale(LOCALE_SABBREVMONTHNAME1 + i, g_locale.monthShort[i], 24, fbMonth[i]);
@@ -50,6 +61,17 @@ static void EnsureLocale(void) {
 
 void TimeFmt_InvalidateLocale(void) {
     g_locale.loaded = false;
+}
+
+const WCHAR* TimeFmt_ShortestDayName(int mondayIndex) {
+    EnsureLocale();
+    if (mondayIndex < 0 || mondayIndex > 6) mondayIndex = 0;
+    return g_locale.dayTiny[mondayIndex];
+}
+
+int TimeFmt_FirstDayOfWeek(void) {
+    EnsureLocale();
+    return g_locale.firstDay;
 }
 
 /* Number of consecutive copies of `c` starting at `p`. */

@@ -8,6 +8,23 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- A `gauge` widget: CPU, memory, disk or battery, drawn as a bar, a ring or
+  just the number. Optional detail line -- `17.9 / 31.8 GB`, `1h 20m left` --
+  and a warning colour past a threshold in either direction, because a disk
+  filling up and a battery draining are trouble in opposite directions. Every
+  reading is one cheap system call on the widget's own schedule; a reading
+  that rounds to the same number it already drew does not repaint. The CPU
+  sample is shared across gauges, since load is a difference between two
+  readings and two widgets sampling independently would disagree.
+- A `calendar` widget: a month view with today marked. Locale, Monday or
+  Sunday weeks, optional ISO week numbers, and the adjacent months dimmed in
+  the margins. It checks the date four times an hour and repaints once a day.
+- `examples/dashboard.ini`, which arranges the new widgets as a status panel.
+- Widget types can carry their own default size. A gauge starts at 280x80
+  and a calendar at 300x290; the three older types keep 320x140, since
+  changing what an existing config resolves to would move widgets people
+  have already placed.
+
 - The `notes` widget is editable in place: click it and type. Mouse and
   keyboard selection, double-click for a word, clipboard, undo that folds a
   burst of typing into one step, and an autosave a second and a half after
@@ -35,6 +52,16 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- Starting to arrange widgets never reached a widget that was mid-interaction.
+  `WM_LW_CANCEL_EDIT` was routed below the edit-mode switch, so a note being
+  typed into only heard about arranging on the way out -- and stayed in its
+  editing state, focusable and raised, while it was dragged around.
+- Widget positions were written to the INI without flushing the profile cache,
+  so a reload straight after arranging could read back the old ones.
+- The settings editor silently dropped any property past its 96th. The cap now
+  comes from `LW_MAX_PROPERTIES`, which `spec.c` asserts against the registry
+  at compile time, so outgrowing it is a build error rather than a key that
+  quietly stops appearing.
 - The settings editor flickered and speckled. Owner-drawn buttons erase
   themselves with the system face colour before asking us to draw, so every
   rounded control was ringed with pale corners; the window painted the whole

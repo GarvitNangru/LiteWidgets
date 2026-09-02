@@ -7,7 +7,7 @@
 
 /* ─────────────────────────── widget types ─────────────────────────── */
 
-static const char* kTypeNames[WIDGET__COUNT] = { "clock", "notes", "image" };
+static const char* kTypeNames[WIDGET__COUNT] = { "clock", "notes", "image", "gauge", "calendar" };
 
 int Spec_ParseType(const char* text) {
     if (!text || !text[0]) return -1;
@@ -83,6 +83,38 @@ void Spec_Defaults(WidgetSpec* spec) {
     c->hand_scale        = 1.0f;
     c->hub_color         = 0x00000000;
     c->smooth_seconds    = false;
+
+    GaugeOptions* g = &spec->gauge;
+    g->source        = GAUGE_CPU;
+    g->style         = GAUGE_BAR;
+    strcpy(g->drive, "C:");
+    g->label[0]      = L'\0';        /* derived from the source */
+    g->show_label    = true;
+    g->show_value    = true;
+    g->show_detail   = false;
+    g->track_color   = 0x00000000;   /* derived from text_color */
+    g->fill_color    = 0x00000000;
+    g->fill_color2   = 0x00000000;
+    g->fill_gradient = GRAD_NONE;
+    g->thickness     = 8.0f;
+    g->warn_above    = 0.0f;
+    g->warn_below    = 0.0f;
+    g->warn_color    = 0x00000000;
+
+    CalendarOptions* cal = &spec->calendar;
+    cal->week_start        = WEEK_LOCALE;
+    cal->show_header       = true;
+    cal->show_weekdays     = true;
+    cal->show_week_numbers = false;
+    cal->show_outside_days = true;
+    cal->header_format[0]  = L'\0';  /* derived in Spec_Finalize */
+    cal->header_color      = 0x00000000;
+    cal->weekday_color     = 0x00000000;
+    cal->weekend_color     = 0x00000000;
+    cal->outside_color     = 0x00000000;
+    cal->today_color       = 0x00000000;
+    cal->today_text_color  = 0x00000000;
+    cal->day_scale         = 1.0f;
 }
 
 /* ─────────────────────────── key dispatch ─────────────────────────── */
@@ -96,9 +128,30 @@ static int ParseTransformValue(const char* text) {
 
 #define KEY(k) (_stricmp(key, k) == 0)
 
+static int ParseGaugeSource(const char* text) {
+    if (_stricmp(text, "memory") == 0 || _stricmp(text, "ram") == 0) return GAUGE_MEMORY;
+    if (_stricmp(text, "disk") == 0)                                 return GAUGE_DISK;
+    if (_stricmp(text, "battery") == 0)                              return GAUGE_BATTERY;
+    return GAUGE_CPU;
+}
+
+static int ParseGaugeStyle(const char* text) {
+    if (_stricmp(text, "ring") == 0)   return GAUGE_RING;
+    if (_stricmp(text, "number") == 0 || _stricmp(text, "text") == 0) return GAUGE_NUMBER;
+    return GAUGE_BAR;
+}
+
+static int ParseWeekStart(const char* text) {
+    if (_stricmp(text, "monday") == 0 || _stricmp(text, "mon") == 0) return WEEK_MONDAY;
+    if (_stricmp(text, "sunday") == 0 || _stricmp(text, "sun") == 0) return WEEK_SUNDAY;
+    return WEEK_LOCALE;
+}
+
 bool Spec_Set(WidgetSpec* spec, const char* key, const char* value) {
     if (!spec || !key || !value) return false;
     ClockOptions* c = &spec->clock;
+    GaugeOptions* g = &spec->gauge;
+    CalendarOptions* cal = &spec->calendar;
 
     /* ── general ── */
     if (KEY("type")) {
@@ -117,8 +170,8 @@ bool Spec_Set(WidgetSpec* spec, const char* key, const char* value) {
     /* ── layout ── */
     if (KEY("x"))       { spec->x = atoi(value);      return true; }
     if (KEY("y"))       { spec->y = atoi(value);      return true; }
-    if (KEY("width"))   { spec->width  = atoi(value); return true; }
-    if (KEY("height"))  { spec->height = atoi(value); return true; }
+    if (KEY("width"))   { spec->width  = atoi(value); spec->width_set  = true; return true; }
+    if (KEY("height"))  { spec->height = atoi(value); spec->height_set = true; return true; }
     if (KEY("anchor"))  { spec->anchor = Layout_ParseAnchor(value); return true; }
     if (KEY("monitor")) { spec->monitor = atoi(value); return true; }
     if (KEY("z_order")) {
@@ -188,6 +241,42 @@ bool Spec_Set(WidgetSpec* spec, const char* key, const char* value) {
     if (KEY("hub_color"))         { c->hub_color = Style_ParseColor(value, c->hub_color); return true; }
     if (KEY("smooth_seconds"))    { c->smooth_seconds = Style_ParseBool(value, false);    return true; }
 
+    /* ── gauge ── */
+    if (KEY("source"))         { g->source = ParseGaugeSource(value); return true; }
+    if (KEY("gauge_style"))    { g->style  = ParseGaugeStyle(value);  return true; }
+    if (KEY("drive")) {
+        strncpy(g->drive, value, sizeof(g->drive) - 1);
+        g->drive[sizeof(g->drive) - 1] = '\0';
+        return true;
+    }
+    if (KEY("label"))          { SetW(g->label, 32, value);                    return true; }
+    if (KEY("show_label"))     { g->show_label  = Style_ParseBool(value, true);  return true; }
+    if (KEY("show_value"))     { g->show_value  = Style_ParseBool(value, true);  return true; }
+    if (KEY("show_detail"))    { g->show_detail = Style_ParseBool(value, false); return true; }
+    if (KEY("track_color"))    { g->track_color = Style_ParseColor(value, g->track_color); return true; }
+    if (KEY("fill_color"))     { g->fill_color  = Style_ParseColor(value, g->fill_color);  return true; }
+    if (KEY("fill_color2"))    { g->fill_color2 = Style_ParseColor(value, g->fill_color2); return true; }
+    if (KEY("fill_gradient"))  { g->fill_gradient = Style_ParseGradient(value); return true; }
+    if (KEY("thickness"))      { g->thickness  = (float)atof(value);            return true; }
+    if (KEY("warn_above"))     { g->warn_above = (float)atof(value);            return true; }
+    if (KEY("warn_below"))     { g->warn_below = (float)atof(value);            return true; }
+    if (KEY("warn_color"))     { g->warn_color = Style_ParseColor(value, g->warn_color); return true; }
+
+    /* ── calendar ── */
+    if (KEY("week_start"))        { cal->week_start = ParseWeekStart(value);              return true; }
+    if (KEY("show_header"))       { cal->show_header = Style_ParseBool(value, true);      return true; }
+    if (KEY("show_weekdays"))     { cal->show_weekdays = Style_ParseBool(value, true);    return true; }
+    if (KEY("show_week_numbers")) { cal->show_week_numbers = Style_ParseBool(value, false); return true; }
+    if (KEY("show_outside_days")) { cal->show_outside_days = Style_ParseBool(value, true); return true; }
+    if (KEY("header_format"))     { SetW(cal->header_format, LW_FORMAT_LEN, value);       return true; }
+    if (KEY("header_color"))      { cal->header_color = Style_ParseColor(value, cal->header_color);   return true; }
+    if (KEY("weekday_color"))     { cal->weekday_color = Style_ParseColor(value, cal->weekday_color); return true; }
+    if (KEY("weekend_color"))     { cal->weekend_color = Style_ParseColor(value, cal->weekend_color); return true; }
+    if (KEY("outside_color"))     { cal->outside_color = Style_ParseColor(value, cal->outside_color); return true; }
+    if (KEY("today_color"))       { cal->today_color = Style_ParseColor(value, cal->today_color);     return true; }
+    if (KEY("today_text_color"))  { cal->today_text_color = Style_ParseColor(value, cal->today_text_color); return true; }
+    if (KEY("day_scale"))         { cal->day_scale = (float)atof(value);                  return true; }
+
     /* ── everything visual ── */
     return Style_Set(&spec->style, key, value);
 }
@@ -196,10 +285,34 @@ bool Spec_Set(WidgetSpec* spec, const char* key, const char* value) {
 
 /* ─────────────────────────── derivation ─────────────────────────── */
 
+bool Spec_IsInteractive(int type) {
+    return type == WIDGET_NOTES || type == WIDGET_IMAGE;
+}
+
+/*
+ * A widget nobody has sized yet should be born the right shape for what it
+ * is: a month grid at 320x140 is unreadable and a CPU bar at 300x290 is
+ * mostly empty panel. Only the types added after 320x140 became the default
+ * differ from it -- changing what an existing config resolves to would move
+ * widgets people have already placed. Stated sizes always win.
+ */
+static void DefaultSize(int type, int* width, int* height) {
+    switch (type) {
+        case WIDGET_GAUGE:    *width = 280; *height =  80; break;
+        case WIDGET_CALENDAR: *width = 300; *height = 290; break;
+        default:              *width = 320; *height = 140; break;
+    }
+}
+
 void Spec_Finalize(WidgetSpec* spec) {
     if (!spec) return;
     ClockOptions* c = &spec->clock;
     const WidgetStyle* s = &spec->style;
+
+    int width = 0, height = 0;
+    DefaultSize(spec->type, &width, &height);
+    if (!spec->width_set)  spec->width  = width;
+    if (!spec->height_set) spec->height = height;
 
     if (spec->width  < 8) spec->width  = 8;
     if (spec->height < 8) spec->height = 8;
@@ -241,22 +354,74 @@ void Spec_Finalize(WidgetSpec* spec) {
     if (spec->opacity <= 0.0f) spec->opacity = 1.0f;
 
     /*
-     * A clock is looked at, so clicks belong to the desktop behind it. Notes
-     * and images are used -- typed into, dropped onto -- so they keep their
-     * clicks unless the config says otherwise.
+     * Gauge and calendar colours trail the text colour the way the dial's do,
+     * so a preset dresses them without having to know they exist.
+     */
+    GaugeOptions* g = &spec->gauge;
+    if (((g->fill_color >> 24) & 0xFFu) == 0)
+        g->fill_color = s->text_color;
+    if (((g->track_color >> 24) & 0xFFu) == 0)
+        g->track_color = Style_ScaleAlpha(s->text_color, 0.18f);
+    if (((g->warn_color >> 24) & 0xFFu) == 0)
+        g->warn_color = 0xFFE06C75;
+    if (g->thickness <= 0.0f)   g->thickness = 8.0f;
+    if (g->warn_above < 0.0f)   g->warn_above = 0.0f;
+    if (g->warn_above > 100.0f) g->warn_above = 100.0f;
+    if (g->warn_below < 0.0f)   g->warn_below = 0.0f;
+    if (g->warn_below > 100.0f) g->warn_below = 100.0f;
+    if (!g->drive[0]) strcpy(g->drive, "C:");
+
+    CalendarOptions* cal = &spec->calendar;
+    if (cal->header_format[0] == 0)
+        wcscpy(cal->header_format, L"MMMM yyyy");
+    if (((cal->header_color >> 24) & 0xFFu) == 0)
+        cal->header_color = s->text_color;
+    if (((cal->weekday_color >> 24) & 0xFFu) == 0)
+        cal->weekday_color = Style_ScaleAlpha(s->text_color, 0.50f);
+    if (((cal->weekend_color >> 24) & 0xFFu) == 0)
+        cal->weekend_color = Style_ScaleAlpha(s->text_color, 0.75f);
+    if (((cal->outside_color >> 24) & 0xFFu) == 0)
+        cal->outside_color = Style_ScaleAlpha(s->text_color, 0.22f);
+    if (((cal->today_color >> 24) & 0xFFu) == 0)
+        cal->today_color = Style_WithAlpha(s->text_color, 0xFF);
+
+    /*
+     * Today's number sits on the marker, not on the panel, so it has to
+     * contrast with the marker. Taking the panel colour looked right until a
+     * translucent-white preset put a white number on a white disc; asking the
+     * marker how bright it is works for any preset.
+     */
+    if (((cal->today_text_color >> 24) & 0xFFu) == 0) {
+        ARGB marker = cal->today_color;
+        float luma = (0.2126f * (float)((marker >> 16) & 0xFFu)
+                    + 0.7152f * (float)((marker >>  8) & 0xFFu)
+                    + 0.0722f * (float)( marker        & 0xFFu)) / 255.0f;
+        cal->today_text_color = (luma > 0.55f) ? 0xFF16161C : 0xFFF2F2F7;
+    }
+    if (cal->day_scale <= 0.0f) cal->day_scale = 1.0f;
+
+    /*
+     * Notes and images are used -- typed into, dropped onto -- so they keep
+     * their clicks. Everything else is looked at, and clicks belong to the
+     * desktop icons behind it. Either way the config can say otherwise.
      */
     if (!spec->click_through_set)
-        spec->click_through = (spec->type == WIDGET_CLOCK);
+        spec->click_through = !Spec_IsInteractive(spec->type);
 }
 
 /* ─────────────────────────── property registry ─────────────────────────── */
 
-#define CLOCK_ONLY TYPE_BIT(WIDGET_CLOCK)
-#define TEXTUAL    (TYPE_BIT(WIDGET_CLOCK) | TYPE_BIT(WIDGET_NOTES))
+#define CLOCK_ONLY    TYPE_BIT(WIDGET_CLOCK)
+#define GAUGE_ONLY    TYPE_BIT(WIDGET_GAUGE)
+#define CALENDAR_ONLY TYPE_BIT(WIDGET_CALENDAR)
+
+/* Everything that puts glyphs on the screen, and so takes the text keys. */
+#define TEXTUAL    (TYPE_BIT(WIDGET_CLOCK) | TYPE_BIT(WIDGET_NOTES) | \
+                    TYPE_BIT(WIDGET_GAUGE) | TYPE_BIT(WIDGET_CALENDAR))
 
 static const PropDef g_props[] = {
 /*  key                    label               kind      group       types       options                                     default        help */
-{"type",               "Type",              PK_ENUM,  PG_GENERAL, TYPE_ANY,   "clock|notes|image",                        "clock",       "Which widget to render"},
+{"type",               "Type",              PK_ENUM,  PG_GENERAL, TYPE_ANY,   "clock|notes|image|gauge|calendar",         "clock",       "Which widget to render"},
 {"enabled",            "Enabled",           PK_BOOL,  PG_GENERAL, TYPE_ANY,   NULL,                                       "true",        "Set to false to keep the config but hide the widget"},
 {"preset",             "Style preset",      PK_ENUM,  PG_GENERAL, TYPE_ANY,   "@presets",                                 "",            "Applies a themed set of colours; individual keys still win"},
 
@@ -264,8 +429,8 @@ static const PropDef g_props[] = {
 {"monitor",            "Monitor",           PK_INT,   PG_LAYOUT,  TYPE_ANY,   NULL,                                       "-1",          "Monitor index, or -1 for the primary display"},
 {"x",                  "X offset",          PK_INT,   PG_LAYOUT,  TYPE_ANY,   NULL,                                       "0",           "Horizontal offset from the anchor, in pixels"},
 {"y",                  "Y offset",          PK_INT,   PG_LAYOUT,  TYPE_ANY,   NULL,                                       "0",           "Vertical offset from the anchor, in pixels"},
-{"width",              "Width",             PK_INT,   PG_LAYOUT,  TYPE_ANY,   NULL,                                       "320",         "Widget width in pixels"},
-{"height",             "Height",            PK_INT,   PG_LAYOUT,  TYPE_ANY,   NULL,                                       "140",         "Widget height in pixels"},
+{"width",              "Width",             PK_INT,   PG_LAYOUT,  TYPE_ANY,   NULL,                                       "320",         "Widget width in pixels; the default varies by type"},
+{"height",             "Height",            PK_INT,   PG_LAYOUT,  TYPE_ANY,   NULL,                                       "140",         "Widget height in pixels; the default varies by type"},
 {"opacity",            "Opacity",           PK_FLOAT, PG_LAYOUT,  TYPE_ANY,   NULL,                                       "1.0",         "Master transparency, 0.0 to 1.0"},
 {"click_through",      "Click-through",     PK_BOOL,  PG_LAYOUT,  TYPE_ANY,   NULL,                                       "true",        "Let clicks pass to the desktop underneath; off by default for notes and image, which you interact with"},
 {"z_order",            "Layer",             PK_ENUM,  PG_LAYOUT,  TYPE_ANY,   "desktop|bottom|top",                       "desktop",     "desktop follows the wallpaper, bottom pins to the very back, top floats above all windows"},
@@ -334,10 +499,43 @@ static const PropDef g_props[] = {
 {"hub_color",          "Hub",               PK_COLOR, PG_ANALOG,  CLOCK_ONLY, NULL,                                       "00000000",    "Centre cap colour"},
 {"smooth_seconds",     "Sweep seconds",     PK_BOOL,  PG_ANALOG,  CLOCK_ONLY, NULL,                                       "false",       "Sweep the second hand; redraws ~20x a second"},
 
+{"source",             "Reading",           PK_ENUM,  PG_GAUGE,   GAUGE_ONLY, "cpu|memory|disk|battery",                  "cpu",         "What the gauge measures"},
+{"gauge_style",        "Gauge style",       PK_ENUM,  PG_GAUGE,   GAUGE_ONLY, "bar|ring|number",                          "bar",         "A track, an arc, or the number on its own"},
+{"drive",              "Drive",             PK_TEXT,  PG_GAUGE,   GAUGE_ONLY, NULL,                                       "C:",          "Which volume the disk reading measures"},
+{"label",              "Label",             PK_TEXT,  PG_GAUGE,   GAUGE_ONLY, NULL,                                       "",            "Blank names the gauge after its reading"},
+{"show_label",         "Show label",        PK_BOOL,  PG_GAUGE,   GAUGE_ONLY, NULL,                                       "true",        "Draw the label"},
+{"show_value",         "Show value",        PK_BOOL,  PG_GAUGE,   GAUGE_ONLY, NULL,                                       "true",        "Draw the percentage"},
+{"show_detail",        "Show detail",       PK_BOOL,  PG_GAUGE,   GAUGE_ONLY, NULL,                                       "false",       "Add the underlying figures, e.g. 6.1 / 16.0 GB"},
+{"fill_color",         "Fill",              PK_COLOR, PG_GAUGE,   GAUGE_ONLY, NULL,                                       "00000000",    "Filled portion; alpha 0 uses the text colour"},
+{"fill_color2",        "Fill 2",            PK_COLOR, PG_GAUGE,   GAUGE_ONLY, NULL,                                       "00000000",    "Gradient end colour for the fill"},
+{"fill_gradient",      "Fill gradient",     PK_ENUM,  PG_GAUGE,   GAUGE_ONLY, "none|vertical|horizontal|diagonal|diagonal_back", "none", "Direction of the fill gradient"},
+{"track_color",        "Track",             PK_COLOR, PG_GAUGE,   GAUGE_ONLY, NULL,                                       "00000000",    "Unfilled portion; alpha 0 derives from the text colour"},
+{"thickness",          "Thickness",         PK_FLOAT, PG_GAUGE,   GAUGE_ONLY, NULL,                                       "8",           "Bar height, or ring stroke width, in pixels"},
+{"warn_above",         "Warn above",        PK_FLOAT, PG_GAUGE,   GAUGE_ONLY, NULL,                                       "0",           "Recolour the fill past this percentage; 0 never does"},
+{"warn_below",         "Warn below",        PK_FLOAT, PG_GAUGE,   GAUGE_ONLY, NULL,                                       "0",           "Recolour the fill under this percentage, for a draining battery"},
+{"warn_color",         "Warning colour",    PK_COLOR, PG_GAUGE,   GAUGE_ONLY, NULL,                                       "00000000",    "Fill colour past the threshold"},
+
+{"week_start",         "Week starts",       PK_ENUM,  PG_CALENDAR, CALENDAR_ONLY, "locale|monday|sunday",                  "locale",      "First column of the grid"},
+{"show_header",        "Show header",       PK_BOOL,  PG_CALENDAR, CALENDAR_ONLY, NULL,                                    "true",        "Draw the month and year line"},
+{"header_format",      "Header pattern",    PK_TEXT,  PG_CALENDAR, CALENDAR_ONLY, NULL,                                    "MMMM yyyy",   "Date pattern for the header line"},
+{"show_weekdays",      "Show weekdays",     PK_BOOL,  PG_CALENDAR, CALENDAR_ONLY, NULL,                                    "true",        "Draw the row of weekday initials"},
+{"show_week_numbers",  "Week numbers",      PK_BOOL,  PG_CALENDAR, CALENDAR_ONLY, NULL,                                    "false",       "Add an ISO week number column"},
+{"show_outside_days",  "Adjacent months",   PK_BOOL,  PG_CALENDAR, CALENDAR_ONLY, NULL,                                    "true",        "Fill the empty cells with neighbouring days"},
+{"day_scale",          "Day size",          PK_FLOAT, PG_CALENDAR, CALENDAR_ONLY, NULL,                                    "1.0",         "Day-number size relative to the font size"},
+{"header_color",       "Header colour",     PK_COLOR, PG_CALENDAR, CALENDAR_ONLY, NULL,                                    "00000000",    "Alpha 0 uses the text colour"},
+{"weekday_color",      "Weekday colour",    PK_COLOR, PG_CALENDAR, CALENDAR_ONLY, NULL,                                    "00000000",    "Alpha 0 derives 50% of the text colour"},
+{"weekend_color",      "Weekend colour",    PK_COLOR, PG_CALENDAR, CALENDAR_ONLY, NULL,                                    "00000000",    "Saturday and Sunday numbers"},
+{"outside_color",      "Adjacent colour",   PK_COLOR, PG_CALENDAR, CALENDAR_ONLY, NULL,                                    "00000000",    "Days belonging to the months either side"},
+{"today_color",        "Today marker",      PK_COLOR, PG_CALENDAR, CALENDAR_ONLY, NULL,                                    "00000000",    "Disc drawn behind today"},
+{"today_text_color",   "Today number",      PK_COLOR, PG_CALENDAR, CALENDAR_ONLY, NULL,                                    "00000000",    "Today's number, drawn on the marker"},
+
 {"path",               "File",              PK_FILE,  PG_SOURCE,  TYPE_FILE,  NULL,                                       "",            "Source file, relative to the config folder"},
 {"reload_seconds",     "Reload every",      PK_INT,   PG_SOURCE,  TYPE_FILE,  NULL,                                       "0",           "Seconds between file checks; 0 loads once at startup"},
 {"fit",                "Fit",               PK_ENUM,  PG_SOURCE,  TYPE_BIT(WIDGET_IMAGE), "contain|cover|stretch",        "contain",     "How the image fills its box"},
 };
+
+_Static_assert(sizeof(g_props) / sizeof(g_props[0]) <= LW_MAX_PROPERTIES,
+               "the property registry outgrew LW_MAX_PROPERTIES");
 
 const PropDef* Spec_Properties(int* count) {
     if (count) *count = (int)(sizeof(g_props) / sizeof(g_props[0]));
@@ -356,7 +554,18 @@ const PropDef* Spec_FindProperty(const char* key) {
 const char* Spec_DefaultFor(const PropDef* prop, int type) {
     if (!prop) return "";
     if (_stricmp(prop->key, "click_through") == 0)
-        return (type == WIDGET_CLOCK) ? "true" : "false";
+        return Spec_IsInteractive(type) ? "false" : "true";
+
+    /* One buffer each, so asking for both in one expression still works. */
+    bool wantsWidth = _stricmp(prop->key, "width") == 0;
+    if (wantsWidth || _stricmp(prop->key, "height") == 0) {
+        static char widthText[8], heightText[8];
+        int width = 0, height = 0;
+        DefaultSize(type, &width, &height);
+        _snprintf(widthText, sizeof(widthText), "%d", width);
+        _snprintf(heightText, sizeof(heightText), "%d", height);
+        return wantsWidth ? widthText : heightText;
+    }
     return prop->def;
 }
 
@@ -375,6 +584,8 @@ const char* Spec_GroupName(int group) {
         case PG_EFFECTS: return "Effects";
         case PG_CLOCK:   return "Clock";
         case PG_ANALOG:  return "Analog dial";
+        case PG_GAUGE:    return "Gauge";
+        case PG_CALENDAR: return "Calendar";
         case PG_SOURCE:  return "Source";
         default:         return "Other";
     }

@@ -1,7 +1,9 @@
 #include "config.h"
 
 #include "widget.h"
+#include "widgets/calendar.h"
 #include "widgets/clock.h"
+#include "widgets/gauge.h"
 #include "widgets/image.h"
 #include "widgets/notes.h"
 
@@ -107,10 +109,12 @@ int Config_ReadAll(const char* iniPath, WidgetSpec* out, int maxCount) {
 
 static bool CreateWidget(const char* iniPath, const WidgetSpec* spec, HINSTANCE hInstance) {
     switch (spec->type) {
-        case WIDGET_CLOCK: return ClockWidget_Create(hInstance, spec);
-        case WIDGET_NOTES: return NotesWidget_Create(hInstance, iniPath, spec);
-        case WIDGET_IMAGE: return ImageWidget_Create(hInstance, iniPath, spec);
-        default:           return false;
+        case WIDGET_CLOCK:    return ClockWidget_Create(hInstance, spec);
+        case WIDGET_NOTES:    return NotesWidget_Create(hInstance, iniPath, spec);
+        case WIDGET_IMAGE:    return ImageWidget_Create(hInstance, iniPath, spec);
+        case WIDGET_GAUGE:    return GaugeWidget_Create(hInstance, spec);
+        case WIDGET_CALENDAR: return CalendarWidget_Create(hInstance, spec);
+        default:              return false;
     }
 }
 
@@ -171,6 +175,18 @@ void Config_Paint(const WidgetSpec* spec, const char* iniPath,
             GpImage* image = Image_Load(path);
             Image_Paint(spec, image, gfx, width, height);
             if (image) GdipDisposeImage(image);
+            break;
+        }
+        case WIDGET_GAUGE: {
+            GaugeReading reading;
+            Gauge_Read(spec, &reading);
+            Gauge_Paint(spec, &reading, gfx, width, height);
+            break;
+        }
+        case WIDGET_CALENDAR: {
+            SYSTEMTIME now;
+            GetLocalTime(&now);
+            Calendar_Paint(spec, &now, gfx, width, height);
             break;
         }
         default:

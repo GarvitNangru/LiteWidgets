@@ -416,6 +416,51 @@ float Drawing_MeasureWidth(GpGraphics* gfx, const TextRun* r) {
     return width;
 }
 
+/* ─────────────────────────── plain cells ─────────────────────────── */
+
+struct DrawingFont {
+    GpFontFamily*   family;
+    GpFont*         font;
+    GpStringFormat* format;
+};
+
+DrawingFont* Drawing_OpenFont(const WCHAR* family, float size, INT style) {
+    if (size <= 0.0f) return NULL;
+
+    DrawingFont* f = (DrawingFont*)calloc(1, sizeof(DrawingFont));
+    if (!f) return NULL;
+
+    f->family = MakeFamily(family);
+    f->format = MakeFormat(ALIGN_CENTER, ALIGN_CENTER, true);
+    if (!f->family || !f->format ||
+        GdipCreateFont(f->family, size, style, UnitPixel, &f->font) != 0) {
+        Drawing_CloseFont(f);
+        return NULL;
+    }
+    return f;
+}
+
+void Drawing_CloseFont(DrawingFont* f) {
+    if (!f) return;
+    if (f->font)   GdipDeleteFont(f->font);
+    if (f->format) GdipDeleteStringFormat(f->format);
+    if (f->family) GdipDeleteFontFamily(f->family);
+    free(f);
+}
+
+void Drawing_Cell(GpGraphics* gfx, DrawingFont* f, const WCHAR* text,
+                  GpRectF box, ARGB color, int alignH, int alignV) {
+    if (!gfx || !f || !text || !text[0] || !VISIBLE(color)) return;
+
+    GdipSetStringFormatAlign(f->format, (GpStringAlignment)alignH);
+    GdipSetStringFormatLineAlign(f->format, (GpStringAlignment)alignV);
+
+    GpSolidFill* brush = NULL;
+    if (GdipCreateSolidFill(color, &brush) != 0) return;
+    GdipDrawString(gfx, text, -1, f->font, &box, f->format, (GpBrush*)brush);
+    GdipDeleteBrush((GpBrush*)brush);
+}
+
 /* ─────────────────────────── metrics ─────────────────────────── */
 
 struct DrawingMetrics {

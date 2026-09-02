@@ -35,7 +35,7 @@
 
 /* ─────────────────────────── constants ─────────────────────────── */
 
-#define MAX_PROPS      96
+#define MAX_PROPS      LW_MAX_PROPERTIES
 #define VALUE_LEN      160
 #define MAX_FONTS      512
 

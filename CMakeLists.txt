@@ -38,6 +38,8 @@ add_executable(LiteWidgets WIN32
     src/widgets/clock.c
     src/widgets/image.c
     src/widgets/notes.c
+    src/widgets/gauge.c
+    src/widgets/calendar.c
     app.manifest
     app.icon.rc
 )

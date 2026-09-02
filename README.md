@@ -36,6 +36,8 @@ dependencies to vendor, one executable and one text file.
 | `clock` | Digital or analog. Custom time and date patterns, locale-aware day and month names, optional seconds, blinking separator, sweeping second hand. |
 | `notes` | A text file you can edit in place: click it and type. Selection, clipboard and undo work the way they do everywhere else, and it saves itself. Optionally re-reads the file when something else changes it. |
 | `image` | A PNG/JPEG, fitted with `contain`, `cover` or `stretch`, clipped to the panel's rounded corners. Click it to pick a file, or drop one on it. |
+| `gauge` | CPU, memory, disk or battery, drawn as a bar, a ring or just the number. Optional detail line (`17.9 / 31.8 GB`) and a warning colour past a threshold in either direction. |
+| `calendar` | A month view with today marked. Locale, Monday or Sunday weeks, optional ISO week numbers, and the adjacent months dimmed in the margins. |
 
 ## Styling
 
@@ -164,10 +166,14 @@ Windows 11, release build, measured in steady state:
 | --- | --- | --- |
 | One clock, hours and minutes | 3.9 MB | 0.000 s over 90 s |
 | Four widgets, one ticking every second with a glow | 4.9 MB | 0.31 s over 60 s (0.5% of a core) |
+| Four system gauges and two calendars | 5.4 MB | 0.016 s over 30 s (0.05% of a core) |
 
 The first row is the point. A clock that only shows hours and minutes has
 nothing to do for 59 of every 60 seconds, so it does nothing — the timer is
-armed for the next minute boundary rather than polling. Cost scales with how
+armed for the next minute boundary rather than polling. A gauge takes one
+cheap reading on its own schedule and repaints only when the number it draws
+would change; a calendar looks at the date four times an hour and repaints
+once a day. Cost scales with how
 often you've asked something to change, not with how many widgets are on
 screen.
 

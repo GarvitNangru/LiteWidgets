@@ -11,12 +11,22 @@
 #define LW_FORMAT_LEN  96
 #define LW_MAX_WIDGETS 64
 
+/*
+ * Ceiling on the property registry, and the size of the arrays the settings
+ * editor builds from it. spec.c asserts the table fits at compile time, so
+ * adding a property past this point is a build error rather than a key that
+ * quietly stops appearing in the editor.
+ */
+#define LW_MAX_PROPERTIES 160
+
 /* ─────────────────────────── widget types ─────────────────────────── */
 
 typedef enum {
     WIDGET_CLOCK = 0,
     WIDGET_NOTES,
     WIDGET_IMAGE,
+    WIDGET_GAUGE,
+    WIDGET_CALENDAR,
     WIDGET__COUNT
 } WidgetType;
 
@@ -33,6 +43,69 @@ typedef enum { CLOCK_DIGITAL = 0, CLOCK_ANALOG } ClockMode;
 
 /* How an image fills its box. */
 typedef enum { FIT_CONTAIN = 0, FIT_COVER, FIT_STRETCH } ImageFit;
+
+/* ─────────────────────────── gauge options ─────────────────────────── */
+
+/*
+ * What a gauge is measuring. Every one of these is a cheap system call the
+ * widget makes on its own tick -- nothing polls, nothing runs a thread, and
+ * a reading that has not changed does not cause a repaint.
+ */
+typedef enum {
+    GAUGE_CPU = 0,
+    GAUGE_MEMORY,
+    GAUGE_DISK,
+    GAUGE_BATTERY
+} GaugeSource;
+
+typedef enum { GAUGE_BAR = 0, GAUGE_RING, GAUGE_NUMBER } GaugeStyle;
+
+typedef struct {
+    int   source;               /* GaugeSource */
+    int   style;                /* GaugeStyle */
+    char  drive[8];             /* which volume the disk source reads */
+
+    WCHAR label[32];            /* empty derives a name from the source */
+    bool  show_label;
+    bool  show_value;
+    bool  show_detail;          /* the second line: "6.1 / 16.0 GB" and friends */
+
+    ARGB  track_color;          /* alpha 0 derives from the text colour */
+    ARGB  fill_color;           /* alpha 0 derives from the text colour */
+    ARGB  fill_color2;
+    int   fill_gradient;
+    float thickness;            /* bar height, or ring stroke width */
+
+    /*
+     * A reading past either threshold repaints the fill in the warning
+     * colour. Two of them because the direction that means trouble depends on
+     * the reading: a disk filling up warns high, a battery draining warns low.
+     */
+    float warn_above;           /* percent; 0 disables */
+    float warn_below;           /* percent; 0 disables */
+    ARGB  warn_color;
+} GaugeOptions;
+
+/* ─────────────────────────── calendar options ─────────────────────── */
+
+typedef enum { WEEK_LOCALE = 0, WEEK_MONDAY, WEEK_SUNDAY } WeekStart;
+
+typedef struct {
+    int   week_start;           /* WeekStart */
+    bool  show_header;
+    bool  show_weekdays;
+    bool  show_week_numbers;
+    bool  show_outside_days;    /* the greyed days of the neighbouring months */
+    WCHAR header_format[LW_FORMAT_LEN];
+
+    ARGB  header_color;         /* alpha 0 derives from the text colour */
+    ARGB  weekday_color;
+    ARGB  weekend_color;
+    ARGB  outside_color;
+    ARGB  today_color;          /* the marker behind today */
+    ARGB  today_text_color;
+    float day_scale;            /* day-number size, relative to font_size */
+} CalendarOptions;
 
 /*
  * Where a widget sits in the window stack.
@@ -98,6 +171,7 @@ typedef struct {
     int         z_order;        /* ZOrder */
     bool        click_through;
     bool        click_through_set;  /* stated in the config, not derived */
+    bool        width_set, height_set;
     float       opacity;        /* 0..1, multiplies every alpha channel */
 
     bool        show_seconds;   /* drives the tick rate for time-based widgets */
@@ -107,8 +181,10 @@ typedef struct {
     int         reload_seconds;  /* 0 = load once at startup */
     int         image_fit;       /* ImageFit */
 
-    WidgetStyle  style;
-    ClockOptions clock;
+    WidgetStyle     style;
+    ClockOptions    clock;
+    GaugeOptions    gauge;
+    CalendarOptions calendar;
 } WidgetSpec;
 
 void Spec_Defaults(WidgetSpec* spec);
@@ -127,6 +203,12 @@ bool Spec_Set(WidgetSpec* spec, const char* key, const char* value);
  */
 void Spec_Finalize(WidgetSpec* spec);
 
+/*
+ * True for the widget types you use rather than look at. They keep their
+ * clicks by default; everything else lets them through to the desktop.
+ */
+bool Spec_IsInteractive(int type);
+
 /* ─────────────────────────── property registry ─────────────────────────── */
 
 typedef enum {
@@ -135,7 +217,7 @@ typedef enum {
 
 typedef enum {
     PG_GENERAL = 0, PG_LAYOUT, PG_SURFACE, PG_TEXT, PG_EFFECTS,
-    PG_CLOCK, PG_ANALOG, PG_SOURCE, PG__COUNT
+    PG_CLOCK, PG_ANALOG, PG_GAUGE, PG_CALENDAR, PG_SOURCE, PG__COUNT
 } PropGroup;
 
 typedef struct {

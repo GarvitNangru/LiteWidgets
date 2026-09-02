@@ -70,7 +70,7 @@ if /i "%CONFIG%"=="debug" (
     set "LDFLAGS=/LTCG /OPT:REF /OPT:ICF"
 )
 
-set "CORE=src\config.c src\spec.c src\desktop.c src\style.c src\drawing.c src\layout.c src\timefmt.c src\widget.c src\widgets\clock.c src\widgets\image.c src\widgets\notes.c"
+set "CORE=src\config.c src\spec.c src\desktop.c src\style.c src\drawing.c src\layout.c src\timefmt.c src\widget.c src\widgets\clock.c src\widgets\image.c src\widgets\notes.c src\widgets\gauge.c src\widgets\calendar.c"
 
 cl.exe /nologo /W4 /std:c17 !CFLAGS! /D_CRT_SECURE_NO_WARNINGS /I src ^
     /Fe"bin\LiteWidgets.exe" /Fo"bin\obj\\" /Fd"bin\LiteWidgets.pdb" ^

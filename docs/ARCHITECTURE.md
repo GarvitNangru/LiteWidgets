@@ -17,6 +17,8 @@ config/widgets.ini
    widget.c  ──owns the HWND, timer, blend──>  widgets/clock.c
         |                                      widgets/notes.c
         |                                      widgets/image.c
+        |                                      widgets/gauge.c
+        |                                      widgets/calendar.c
         v                                          |
   UpdateLayeredWindow                              | all draw through
                                                    v
@@ -31,6 +33,13 @@ context. The live widget calls it with a layered-window bitmap; the settings
 preview calls it with an offscreen bitmap; `tools/render.c` calls it with one
 it saves to PNG. There is no second code path to keep in sync, which is why
 the preview is exact rather than approximate.
+
+**Adding a widget type is five edits.** A `WidgetType` and an options struct
+in `spec.h`; defaults, keys and property rows in `spec.c`; a `widgets/*.c`
+with a stateless painter and a vtable; a case each in `Config_Load` and
+`Config_Paint`; and the file in both build lists. The settings editor, the
+generated reference and the offscreen renderer all pick it up from the
+property registry without being told.
 
 **Input goes through one hook.** A widget may implement `on_message` in its
 vtable and see window messages before the default handling. That is the whole
