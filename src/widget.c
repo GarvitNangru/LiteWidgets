@@ -172,6 +172,19 @@ static LRESULT CALLBACK WidgetWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM
     Widget* w = (Widget*)GetWindowLongPtrA(hWnd, GWLP_USERDATA);
 
     /*
+     * One message outranks the mode: arranging is starting or stopping, and a
+     * widget in the middle of an interaction has to commit and stand down.
+     * Routing it below the edit-mode switch meant a note being typed into
+     * never heard that arranging had begun, and stayed in its editing state
+     * while it was dragged around.
+     */
+    if (w && msg == WM_LW_CANCEL_EDIT && w->vt->on_message) {
+        LRESULT ignored = 0;
+        w->vt->on_message(w, msg, wParam, lParam, &ignored);
+        return 0;
+    }
+
+    /*
      * Arranging outranks the widget's own behaviour: while the user is
      * placing widgets, every one of them is a draggable block and nothing
      * else. Outside edit mode, an interactive widget sees the message first.
@@ -466,6 +479,7 @@ void Widget_Restack(Widget* w) {
 void Widget_Destroy(Widget* w) {
     if (!w) return;
     Untrack(w);
+    if (g_dragging == w) EndDrag();   /* never leave the drag pointing at freed memory */
 
     HWND hwnd = w->hwnd;
     w->hwnd = NULL;
@@ -544,4 +558,11 @@ void Widget_SavePositions(const char* iniPath) {
             WritePrivateProfileStringA(w->section, "monitor", buf, iniPath);
         }
     }
+
+    /*
+     * Profile writes sit in a cache until something asks for them to land.
+     * Without this the editor can reload the config and read back the
+     * positions the widgets had before they were dragged.
+     */
+    WritePrivateProfileStringA(NULL, NULL, NULL, iniPath);
 }
