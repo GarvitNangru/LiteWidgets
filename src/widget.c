@@ -47,12 +47,12 @@ void Widget_SetSnapGrid(int pixels) {
 /*
  * Park a widget where its z_order asks for.
  *
- * The interesting case is ZORDER_DESKTOP. HWND_BOTTOM is not good enough:
- * a live wallpaper renders into its own window, which does not necessarily
- * stay at the bottom, so a widget pinned to the very bottom disappears
- * behind the wallpaper. Sitting immediately above whatever is painting the
- * desktop keeps the widget visible while still leaving it behind every
- * normal application window.
+ * The interesting case is ZORDER_DESKTOP: directly above whatever is painting
+ * the desktop, and behind every ordinary window. Usually that is the desktop
+ * itself, which is also the widget's owner, and the bottom of the z-order
+ * says it exactly. A live wallpaper that renders into a window of its own
+ * does not stay at the bottom, so there the widget has to be placed relative
+ * to it instead.
  */
 static void PlaceWidget(Widget* w) {
     if (!w || !w->hwnd) return;
@@ -67,15 +67,28 @@ static void PlaceWidget(Widget* w) {
     }
 
     HWND wallpaper = DesktopHost_FindWallpaper();
-    if (!wallpaper) {
+
+    /*
+     * Windows keeps an owned window above its owner, so for a widget owned by
+     * the desktop the bottom of the z-order *is* the slot directly above the
+     * desktop. Asking for it by name is the only placement that cannot go
+     * wrong: anchoring relative to a neighbour puts the widget wherever that
+     * neighbour happens to be, and a neighbour that turns out to be topmost
+     * takes the widget into the topmost band with it.
+     */
+    if (!wallpaper || wallpaper == GetWindow(w->hwnd, GW_OWNER)) {
         SetWindowPos(w->hwnd, HWND_BOTTOM, 0, 0, 0, 0, ZFLAGS);
         return;
     }
 
-    /* Insert after the wallpaper's neighbour, which lands us just above it. */
+    /* A live wallpaper in a window of its own: sit directly on top of it. */
     HWND above = GetWindow(wallpaper, GW_HWNDPREV);
     if (above == w->hwnd) return;               /* already in place */
-    SetWindowPos(w->hwnd, above ? above : HWND_TOP, 0, 0, 0, 0, ZFLAGS);
+    if (!above || (GetWindowLongPtrA(above, GWL_EXSTYLE) & WS_EX_TOPMOST)) {
+        SetWindowPos(w->hwnd, HWND_BOTTOM, 0, 0, 0, 0, ZFLAGS);
+        return;
+    }
+    SetWindowPos(w->hwnd, above, 0, 0, 0, 0, ZFLAGS);
 }
 
 void Widget_ReassertZOrder(void) {
@@ -87,8 +100,8 @@ void Widget_ReassertZOrder(void) {
     for (int i = 0; i < g_trackedCount; i++) {
         Widget* w = g_tracked[i];
         if (!w || !w->hwnd || w->z_order != ZORDER_DESKTOP) continue;
-        /* Only rescue the ones that actually fell behind. */
-        if (DesktopHost_IsBehind(w->hwnd, wallpaper)) PlaceWidget(w);
+        /* Only move the ones that actually drifted. */
+        if (DesktopHost_IsMisplaced(w->hwnd, wallpaper)) PlaceWidget(w);
     }
 }
 
@@ -298,7 +311,7 @@ static bool RegisterWidgetClass(HINSTANCE hInstance) {
     wc.style         = CS_DBLCLKS;   /* the notes editor selects words on one */
     wc.lpfnWndProc   = WidgetWndProc;
     wc.hInstance     = hInstance;
-    wc.lpszClassName = "LiteWidgetClass";
+    wc.lpszClassName = LW_WIDGET_CLASS;
     wc.hCursor       = NULL;    /* set per message, see WM_SETCURSOR */
 
     registered = RegisterClassA(&wc) != 0;
@@ -344,7 +357,7 @@ bool Widget_Init(Widget* w, HINSTANCE hInstance, const WidgetVtable* vt,
      */
     HWND owner = (spec->z_order == ZORDER_TOP) ? NULL : DesktopHost_GetOwner();
 
-    w->hwnd = CreateWindowExA(exStyle, "LiteWidgetClass", "LiteWidget",
+    w->hwnd = CreateWindowExA(exStyle, LW_WIDGET_CLASS, "LiteWidget",
                               WS_POPUP | WS_VISIBLE,
                               pos.x, pos.y, spec->width, spec->height,
                               owner, NULL, hInstance, w);

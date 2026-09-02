@@ -52,6 +52,23 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- Widgets drew on top of other applications -- a fullscreen game especially.
+  Two window classes in the live-wallpaper list belong to other people's
+  software: `CEF-OSC-WIDGET` is the GeForce overlay and `UnrealWindow` is
+  every Unreal Engine game. Either one was taken for the wallpaper, and the
+  widgets were then parked directly above it, which on this machine put them
+  45 slots up the z-order, in front of the taskbar and in front of whatever
+  the overlay was covering. Both classes are gone, and a class match now only
+  counts inside the desktop band: front to back, any ordinary window rules
+  out everything above it. A widget that has drifted out of the band -- above
+  a window that is not ours, or behind the wallpaper -- is put back on the
+  next foreground change.
+- A widget was placed by anchoring it after the wallpaper's neighbour, which
+  is whatever window happens to be there. `SetWindowPos` makes a window
+  topmost when it lands after a topmost one, and hidden topmost windows do
+  turn up at the bottom of the z-order. Widgets are owned by the desktop and
+  Windows keeps an owned window above its owner, so asking for `HWND_BOTTOM`
+  names the slot directly above the desktop and cannot go wrong.
 - Starting to arrange widgets never reached a widget that was mid-interaction.
   `WM_LW_CANCEL_EDIT` was routed below the edit-mode switch, so a note being
   typed into only heard about arranging on the way out -- and stayed in its

@@ -8,6 +8,9 @@
 #include "gdiplus_helpers.h"
 #include "spec.h"
 
+/* Every widget window shares this class, which is how one is recognised. */
+#define LW_WIDGET_CLASS "LiteWidgetClass"
+
 struct Widget;
 
 typedef struct WidgetVtable {

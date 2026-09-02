@@ -42,8 +42,11 @@ void DesktopHost_Reattach(void);
  */
 HWND DesktopHost_FindWallpaper(void);
 
-/* True when `window` sits behind `reference` in the z-order. */
-bool DesktopHost_IsBehind(HWND window, HWND reference);
+/*
+ * True when a widget has drifted out of the desktop band -- either behind
+ * the wallpaper, or in front of a window that belongs to somebody else.
+ */
+bool DesktopHost_IsMisplaced(HWND window, HWND wallpaper);
 
 /* True when the window belongs to the desktop band rather than an app. */
 bool DesktopHost_IsDesktopWindow(HWND window);
