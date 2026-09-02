@@ -655,6 +655,23 @@ static void OnChoiceChanged(int index);
 
 static int MenuRowHeight(void) { return Scale(26); }
 
+/* A list field's dropdown adds to the value rather than replacing it. */
+static void AppendChoice(int index, const char* value) {
+    HWND ctrl = g_controls[index].ctrl;
+    if (!ctrl || !value || !value[0]) return;
+
+    char text[VALUE_LEN];
+    GetWindowTextA(ctrl, text, VALUE_LEN);
+
+    size_t len = strlen(text);
+    while (len > 0 && (text[len - 1] == ' ' || text[len - 1] == ',')) text[--len] = '\0';
+    if (len + strlen(value) + 3 >= VALUE_LEN) return;
+
+    _snprintf(text + len, VALUE_LEN - len, "%s%s", len ? ", " : "", value);
+    text[VALUE_LEN - 1] = '\0';
+    SetWindowTextA(ctrl, text);
+}
+
 static void CloseMenu(bool commit, int pick) {
     if (!g_menu) return;
 
@@ -666,11 +683,16 @@ static void CloseMenu(bool commit, int pick) {
     if (GetCapture() == menu) ReleaseCapture();
     DestroyWindow(menu);
 
-    if (commit && prop >= 0 && pick >= 0 && pick < g_choice[prop].count) {
-        g_choice[prop].selected = pick;
-        InvalidateRect(g_controls[prop].ctrl, NULL, FALSE);
-        OnChoiceChanged(prop);
+    if (!commit || prop < 0 || pick < 0 || pick >= g_choice[prop].count) return;
+
+    if (g_props[prop].kind == PK_LIST) {
+        AppendChoice(prop, g_choice[prop].items[pick]);
+        return;   /* the edit reports its own change */
     }
+
+    g_choice[prop].selected = pick;
+    InvalidateRect(g_controls[prop].ctrl, NULL, FALSE);
+    OnChoiceChanged(prop);
 }
 
 static void MenuPaint(HWND hWnd, HDC hdc) {
@@ -1136,6 +1158,28 @@ static void WriteControl(int index, const char* value, const char* preset) {
     if (g_props[index].kind == PK_COLOR) SyncColorRow(index);
 }
 
+/*
+ * What a control actually contributes to the widget.
+ *
+ * A field showing nothing but its own default states nothing, and is dropped
+ * rather than written out. The preview reads values through here too, so what
+ * it draws is what the file will say -- a size that is left to be derived,
+ * for instance, has to be derived in both places or the preview lies.
+ */
+static void SnapshotValue(int index, const char* preset, char* out, int cap) {
+    ReadControl(index, out, cap);
+
+    /*
+     * `type` anchors the section -- without it the loader skips the whole
+     * widget -- and `preset` is what the other defaults are measured
+     * against, so both are always kept.
+     */
+    if (_stricmp(g_props[index].key, "type") == 0
+     || _stricmp(g_props[index].key, "preset") == 0) return;
+
+    if (strcmp(out, EffectiveDefault(preset, index)) == 0) out[0] = '\0';
+}
+
 static void CollectSelection(void) {
     if (g_selected < 0 || g_selected >= g_count) return;
     Entry* entry = &g_entries[g_selected];
@@ -1145,17 +1189,7 @@ static void CollectSelection(void) {
 
     for (int i = 0; i < g_propCount; i++) {
         char value[VALUE_LEN];
-        ReadControl(i, value, VALUE_LEN);
-
-        /*
-         * `type` anchors the section -- without it the loader skips the whole
-         * widget -- and `preset` is what the other defaults are measured
-         * against, so both are always kept.
-         */
-        bool required = _stricmp(g_props[i].key, "type") == 0
-                     || _stricmp(g_props[i].key, "preset") == 0;
-        if (!required && strcmp(value, EffectiveDefault(preset, i)) == 0)
-            value[0] = '\0';
+        SnapshotValue(i, preset, value, VALUE_LEN);
 
         if (strcmp(entry->values[i], value) != 0) g_dirty = true;
         strncpy(entry->values[i], value, VALUE_LEN - 1);
@@ -1207,8 +1241,10 @@ static void PaintPreview(HDC hdc, const RECT* client) {
     if (g_selected < 0 || g_selected >= g_count) return;
 
     Entry snapshot = g_entries[g_selected];
+    char preset[VALUE_LEN];
+    CurrentPresetName(&snapshot, preset, VALUE_LEN);
     for (int i = 0; i < g_propCount; i++)
-        ReadControl(i, snapshot.values[i], VALUE_LEN);
+        SnapshotValue(i, preset, snapshot.values[i], VALUE_LEN);
 
     WidgetSpec spec;
     BuildSpec(&snapshot, &spec);
@@ -1466,8 +1502,9 @@ static int LayoutRows(void) {
                           sliderW, ctrlH);
                 break;
             }
-            case PK_FILE: {
-                int buttonW = Scale(84);
+            case PK_FILE:
+            case PK_LIST: {
+                int buttonW = Scale(g_props[i].kind == PK_LIST ? 52 : 84);
                 Place(g_controls[i].ctrl, fieldX + Scale(9), top + Scale(4),
                       fieldW - buttonW - Scale(26), ctrlH - Scale(8));
                 Place(g_controls[i].browse, fieldX + fieldW - buttonW, top, buttonW, ctrlH);
@@ -2057,6 +2094,15 @@ static void CreatePropControls(void) {
                                    g_pane, PROP_ID(i, SUB_BROWSE));
                 break;
 
+            /* A typed list: the field is text, the button appends a choice. */
+            case PK_LIST:
+                ChoiceFill(&g_choice[i], prop->options);
+                row->ctrl = Make("EDIT", "", ES_AUTOHSCROLL | WS_TABSTOP, 0,
+                                 g_pane, PROP_ID(i, SUB_CTRL));
+                row->browse = Make("BUTTON", "Add", BS_OWNERDRAW | WS_TABSTOP, 0,
+                                   g_pane, PROP_ID(i, SUB_BROWSE));
+                break;
+
             default:
                 row->ctrl = Make("EDIT", "", ES_AUTOHSCROLL | WS_TABSTOP, 0,
                                  g_pane, PROP_ID(i, SUB_CTRL));
@@ -2301,7 +2347,12 @@ static void OnPropCommand(int id, int code) {
     int sub = PROP_SUB(id);
 
     if (sub == SUB_SWATCH) { PickColor(index); RefreshPreview(); return; }
-    if (sub == SUB_BROWSE) { PickFile(index);  RefreshPreview(); return; }
+    if (sub == SUB_BROWSE) {
+        if (g_props[index].kind == PK_LIST) { OpenMenu(index); return; }
+        PickFile(index);
+        RefreshPreview();
+        return;
+    }
 
     if (code == EN_CHANGE) {
         if (g_suppressSync) return;

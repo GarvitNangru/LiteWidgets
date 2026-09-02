@@ -85,10 +85,18 @@ void Spec_Defaults(WidgetSpec* spec) {
     c->smooth_seconds    = false;
 
     GaugeOptions* g = &spec->gauge;
-    g->source        = GAUGE_CPU;
+    g->count = 1;
+    for (int i = 0; i < LW_GAUGE_MAX; i++) {
+        g->items[i].source = GAUGE_CPU;
+        strcpy(g->items[i].drive, "C:");
+        g->items[i].label[0] = L'\0';   /* derived from the source */
+        g->items[i].warn_above = 0.0f;
+        g->items[i].warn_below = 0.0f;
+    }
     g->style         = GAUGE_BAR;
-    strcpy(g->drive, "C:");
-    g->label[0]      = L'\0';        /* derived from the source */
+    g->layout        = GAUGE_LAYOUT_AUTO;
+    g->columns       = 0;            /* derived from the reading count */
+    g->spacing       = 10.0f;
     g->show_label    = true;
     g->show_value    = true;
     g->show_detail   = false;
@@ -97,8 +105,6 @@ void Spec_Defaults(WidgetSpec* spec) {
     g->fill_color2   = 0x00000000;
     g->fill_gradient = GRAD_NONE;
     g->thickness     = 8.0f;
-    g->warn_above    = 0.0f;
-    g->warn_below    = 0.0f;
     g->warn_color    = 0x00000000;
 
     CalendarOptions* cal = &spec->calendar;
@@ -139,6 +145,49 @@ static int ParseGaugeStyle(const char* text) {
     if (_stricmp(text, "ring") == 0)   return GAUGE_RING;
     if (_stricmp(text, "number") == 0 || _stricmp(text, "text") == 0) return GAUGE_NUMBER;
     return GAUGE_BAR;
+}
+
+static int ParseGaugeLayout(const char* text) {
+    if (_stricmp(text, "vertical") == 0 || _stricmp(text, "column") == 0)
+        return GAUGE_LAYOUT_VERTICAL;
+    if (_stricmp(text, "horizontal") == 0 || _stricmp(text, "row") == 0)
+        return GAUGE_LAYOUT_HORIZONTAL;
+    if (_stricmp(text, "grid") == 0) return GAUGE_LAYOUT_GRID;
+    return GAUGE_LAYOUT_AUTO;
+}
+
+/*
+ * Every key that describes a reading takes one value per reading:
+ * "warn_above = 85, 90, 0, 20". A single value covers all of them, so the
+ * one-reading spelling of each key is exactly what it always was, and an
+ * empty slot ("85, , 90") keeps that reading's default.
+ *
+ * Returns how many values were supplied, which is what tells Spec_Finalize
+ * whether it is looking at a broadcast or a positional list.
+ */
+#define LIST_TOKEN 48
+
+static int SplitList(const char* value, char out[][LIST_TOKEN], int max) {
+    int count = 0;
+    const char* p = value;
+
+    while (count < max) {
+        const char* comma = strchr(p, ',');
+        const char* end = comma ? comma : p + strlen(p);
+
+        while (p < end && (*p == ' ' || *p == '\t')) p++;
+        while (end > p && (end[-1] == ' ' || end[-1] == '\t')) end--;
+
+        size_t len = (size_t)(end - p);
+        if (len >= LIST_TOKEN) len = LIST_TOKEN - 1;
+        memcpy(out[count], p, len);
+        out[count][len] = '\0';
+        count++;
+
+        if (!comma) break;
+        p = comma + 1;
+    }
+    return count;
 }
 
 static int ParseWeekStart(const char* text) {
@@ -242,14 +291,50 @@ bool Spec_Set(WidgetSpec* spec, const char* key, const char* value) {
     if (KEY("smooth_seconds"))    { c->smooth_seconds = Style_ParseBool(value, false);    return true; }
 
     /* ── gauge ── */
-    if (KEY("source"))         { g->source = ParseGaugeSource(value); return true; }
-    if (KEY("gauge_style"))    { g->style  = ParseGaugeStyle(value);  return true; }
-    if (KEY("drive")) {
-        strncpy(g->drive, value, sizeof(g->drive) - 1);
-        g->drive[sizeof(g->drive) - 1] = '\0';
+    if (KEY("source")) {
+        char tokens[LW_GAUGE_MAX][LIST_TOKEN];
+        int supplied = SplitList(value, tokens, LW_GAUGE_MAX);
+        int count = 0;
+        for (int i = 0; i < supplied; i++)
+            if (tokens[i][0]) g->items[count++].source = ParseGaugeSource(tokens[i]);
+        if (count > 0) g->count = count;
         return true;
     }
-    if (KEY("label"))          { SetW(g->label, 32, value);                    return true; }
+    if (KEY("drive")) {
+        char tokens[LW_GAUGE_MAX][LIST_TOKEN];
+        g->stated_drives = SplitList(value, tokens, LW_GAUGE_MAX);
+        for (int i = 0; i < g->stated_drives; i++) {
+            if (!tokens[i][0]) continue;
+            strncpy(g->items[i].drive, tokens[i], sizeof(g->items[i].drive) - 1);
+            g->items[i].drive[sizeof(g->items[i].drive) - 1] = '\0';
+        }
+        return true;
+    }
+    if (KEY("label")) {
+        char tokens[LW_GAUGE_MAX][LIST_TOKEN];
+        g->stated_labels = SplitList(value, tokens, LW_GAUGE_MAX);
+        for (int i = 0; i < g->stated_labels; i++)
+            if (tokens[i][0]) SetW(g->items[i].label, 32, tokens[i]);
+        return true;
+    }
+    if (KEY("warn_above")) {
+        char tokens[LW_GAUGE_MAX][LIST_TOKEN];
+        g->stated_above = SplitList(value, tokens, LW_GAUGE_MAX);
+        for (int i = 0; i < g->stated_above; i++)
+            if (tokens[i][0]) g->items[i].warn_above = (float)atof(tokens[i]);
+        return true;
+    }
+    if (KEY("warn_below")) {
+        char tokens[LW_GAUGE_MAX][LIST_TOKEN];
+        g->stated_below = SplitList(value, tokens, LW_GAUGE_MAX);
+        for (int i = 0; i < g->stated_below; i++)
+            if (tokens[i][0]) g->items[i].warn_below = (float)atof(tokens[i]);
+        return true;
+    }
+    if (KEY("gauge_style"))    { g->style  = ParseGaugeStyle(value);   return true; }
+    if (KEY("gauge_layout"))   { g->layout = ParseGaugeLayout(value);  return true; }
+    if (KEY("gauge_columns"))  { g->columns = atoi(value);             return true; }
+    if (KEY("gauge_spacing"))  { g->spacing = (float)atof(value);      return true; }
     if (KEY("show_label"))     { g->show_label  = Style_ParseBool(value, true);  return true; }
     if (KEY("show_value"))     { g->show_value  = Style_ParseBool(value, true);  return true; }
     if (KEY("show_detail"))    { g->show_detail = Style_ParseBool(value, false); return true; }
@@ -258,8 +343,6 @@ bool Spec_Set(WidgetSpec* spec, const char* key, const char* value) {
     if (KEY("fill_color2"))    { g->fill_color2 = Style_ParseColor(value, g->fill_color2); return true; }
     if (KEY("fill_gradient"))  { g->fill_gradient = Style_ParseGradient(value); return true; }
     if (KEY("thickness"))      { g->thickness  = (float)atof(value);            return true; }
-    if (KEY("warn_above"))     { g->warn_above = (float)atof(value);            return true; }
-    if (KEY("warn_below"))     { g->warn_below = (float)atof(value);            return true; }
     if (KEY("warn_color"))     { g->warn_color = Style_ParseColor(value, g->warn_color); return true; }
 
     /* ── calendar ── */
@@ -289,16 +372,93 @@ bool Spec_IsInteractive(int type) {
     return type == WIDGET_NOTES || type == WIDGET_IMAGE;
 }
 
+/* How the readings of one gauge are tiled, once the layout is resolved. */
+void Spec_GaugeGrid(const GaugeOptions* g, int* cols, int* rows) {
+    int columns = 1;
+    switch (g->layout) {
+        case GAUGE_LAYOUT_HORIZONTAL: columns = g->count; break;
+        case GAUGE_LAYOUT_GRID:       columns = g->columns; break;
+        default:                      columns = 1; break;
+    }
+    if (columns < 1) columns = 1;
+    if (columns > g->count) columns = g->count;
+
+    *cols = columns;
+    *rows = (g->count + columns - 1) / columns;
+}
+
+/*
+ * Everything about a gauge that is derived rather than stated: how many
+ * readings there are, how they are tiled, and the colours a preset should
+ * have dressed but does not know about.
+ */
+static void ResolveGauge(GaugeOptions* g, const WidgetStyle* s) {
+    if (g->count < 1) g->count = 1;
+    if (g->count > LW_GAUGE_MAX) g->count = LW_GAUGE_MAX;
+
+    /* One value covers every reading; several are positional. */
+    for (int i = 1; i < g->count; i++) {
+        if (g->stated_drives == 1) strcpy(g->items[i].drive, g->items[0].drive);
+        if (g->stated_labels == 1) wcscpy(g->items[i].label, g->items[0].label);
+        if (g->stated_above  == 1) g->items[i].warn_above = g->items[0].warn_above;
+        if (g->stated_below  == 1) g->items[i].warn_below = g->items[0].warn_below;
+    }
+
+    for (int i = 0; i < g->count; i++) {
+        GaugeItem* item = &g->items[i];
+        if (item->warn_above < 0.0f)   item->warn_above = 0.0f;
+        if (item->warn_above > 100.0f) item->warn_above = 100.0f;
+        if (item->warn_below < 0.0f)   item->warn_below = 0.0f;
+        if (item->warn_below > 100.0f) item->warn_below = 100.0f;
+        if (!item->drive[0]) strcpy(item->drive, "C:");
+    }
+
+    /*
+     * Bars are wide and short, so they stack; a row of rings reads better
+     * than a column of them. Stating a layout always wins.
+     */
+    if (g->layout == GAUGE_LAYOUT_AUTO)
+        g->layout = (g->style == GAUGE_BAR) ? GAUGE_LAYOUT_VERTICAL
+                                            : GAUGE_LAYOUT_HORIZONTAL;
+    if (g->columns < 1) {
+        int columns = 1;
+        while (columns * columns < g->count) columns++;   /* the squarest grid */
+        g->columns = columns;
+    }
+    if (g->spacing < 0.0f) g->spacing = 0.0f;
+
+    if (((g->fill_color >> 24) & 0xFFu) == 0)
+        g->fill_color = s->text_color;
+    if (((g->track_color >> 24) & 0xFFu) == 0)
+        g->track_color = Style_ScaleAlpha(s->text_color, 0.18f);
+    if (((g->warn_color >> 24) & 0xFFu) == 0)
+        g->warn_color = 0xFFE06C75;
+    if (g->thickness <= 0.0f) g->thickness = 8.0f;
+}
+
 /*
  * A widget nobody has sized yet should be born the right shape for what it
- * is: a month grid at 320x140 is unreadable and a CPU bar at 300x290 is
- * mostly empty panel. Only the types added after 320x140 became the default
- * differ from it -- changing what an existing config resolves to would move
- * widgets people have already placed. Stated sizes always win.
+ * is: a month grid at 320x140 is unreadable, a ring in a 280x80 box is a
+ * dial with nothing around it, and four stacked bars need four bars' worth
+ * of height. Only the types added after 320x140 became the default differ
+ * from it -- changing what an existing config resolves to would move widgets
+ * people have already placed. Stated sizes always win.
  */
-static void DefaultSize(int type, int* width, int* height) {
-    switch (type) {
-        case WIDGET_GAUGE:    *width = 280; *height =  80; break;
+static void DefaultSize(const WidgetSpec* spec, int* width, int* height) {
+    switch (spec->type) {
+        case WIDGET_GAUGE: {
+            const GaugeOptions* g = &spec->gauge;
+            bool round = (g->style != GAUGE_BAR);
+            int cols = 1, rows = 1;
+            Spec_GaugeGrid(g, &cols, &rows);
+
+            int cellW = round ? 170 : 280;
+            int cellH = round ? 170 :  80;
+            int gap   = (int)(g->spacing + 0.5f);
+            *width  = cellW * cols + gap * (cols - 1);
+            *height = cellH * rows + gap * (rows - 1);
+            break;
+        }
         case WIDGET_CALENDAR: *width = 300; *height = 290; break;
         default:              *width = 320; *height = 140; break;
     }
@@ -309,8 +469,10 @@ void Spec_Finalize(WidgetSpec* spec) {
     ClockOptions* c = &spec->clock;
     const WidgetStyle* s = &spec->style;
 
+    ResolveGauge(&spec->gauge, s);   /* the default size depends on the grid */
+
     int width = 0, height = 0;
-    DefaultSize(spec->type, &width, &height);
+    DefaultSize(spec, &width, &height);
     if (!spec->width_set)  spec->width  = width;
     if (!spec->height_set) spec->height = height;
 
@@ -354,23 +516,9 @@ void Spec_Finalize(WidgetSpec* spec) {
     if (spec->opacity <= 0.0f) spec->opacity = 1.0f;
 
     /*
-     * Gauge and calendar colours trail the text colour the way the dial's do,
-     * so a preset dresses them without having to know they exist.
+     * Calendar colours trail the text colour the way the dial's do, so a
+     * preset dresses them without having to know they exist.
      */
-    GaugeOptions* g = &spec->gauge;
-    if (((g->fill_color >> 24) & 0xFFu) == 0)
-        g->fill_color = s->text_color;
-    if (((g->track_color >> 24) & 0xFFu) == 0)
-        g->track_color = Style_ScaleAlpha(s->text_color, 0.18f);
-    if (((g->warn_color >> 24) & 0xFFu) == 0)
-        g->warn_color = 0xFFE06C75;
-    if (g->thickness <= 0.0f)   g->thickness = 8.0f;
-    if (g->warn_above < 0.0f)   g->warn_above = 0.0f;
-    if (g->warn_above > 100.0f) g->warn_above = 100.0f;
-    if (g->warn_below < 0.0f)   g->warn_below = 0.0f;
-    if (g->warn_below > 100.0f) g->warn_below = 100.0f;
-    if (!g->drive[0]) strcpy(g->drive, "C:");
-
     CalendarOptions* cal = &spec->calendar;
     if (cal->header_format[0] == 0)
         wcscpy(cal->header_format, L"MMMM yyyy");
@@ -499,10 +647,13 @@ static const PropDef g_props[] = {
 {"hub_color",          "Hub",               PK_COLOR, PG_ANALOG,  CLOCK_ONLY, NULL,                                       "00000000",    "Centre cap colour"},
 {"smooth_seconds",     "Sweep seconds",     PK_BOOL,  PG_ANALOG,  CLOCK_ONLY, NULL,                                       "false",       "Sweep the second hand; redraws ~20x a second"},
 
-{"source",             "Reading",           PK_ENUM,  PG_GAUGE,   GAUGE_ONLY, "cpu|memory|disk|battery",                  "cpu",         "What the gauge measures"},
+{"source",             "Readings",          PK_LIST,  PG_GAUGE,   GAUGE_ONLY, "cpu|memory|disk|battery",                  "cpu",         "What the gauge measures; list several to put them in one widget"},
 {"gauge_style",        "Gauge style",       PK_ENUM,  PG_GAUGE,   GAUGE_ONLY, "bar|ring|number",                          "bar",         "A track, an arc, or the number on its own"},
-{"drive",              "Drive",             PK_TEXT,  PG_GAUGE,   GAUGE_ONLY, NULL,                                       "C:",          "Which volume the disk reading measures"},
-{"label",              "Label",             PK_TEXT,  PG_GAUGE,   GAUGE_ONLY, NULL,                                       "",            "Blank names the gauge after its reading"},
+{"gauge_layout",       "Arrangement",       PK_ENUM,  PG_GAUGE,   GAUGE_ONLY, "auto|vertical|horizontal|grid",            "auto",        "How several readings are arranged; auto stacks bars and puts rings in a row"},
+{"gauge_columns",      "Grid columns",      PK_INT,   PG_GAUGE,   GAUGE_ONLY, NULL,                                       "0",           "Columns when the arrangement is a grid; 0 picks the squarest one"},
+{"gauge_spacing",      "Spacing",           PK_FLOAT, PG_GAUGE,   GAUGE_ONLY, NULL,                                       "10",          "Pixels between readings"},
+{"drive",              "Drive",             PK_TEXT,  PG_GAUGE,   GAUGE_ONLY, NULL,                                       "C:",          "Which volume a disk reading measures; one per reading"},
+{"label",              "Label",             PK_TEXT,  PG_GAUGE,   GAUGE_ONLY, NULL,                                       "",            "Blank names each reading after its source; one per reading"},
 {"show_label",         "Show label",        PK_BOOL,  PG_GAUGE,   GAUGE_ONLY, NULL,                                       "true",        "Draw the label"},
 {"show_value",         "Show value",        PK_BOOL,  PG_GAUGE,   GAUGE_ONLY, NULL,                                       "true",        "Draw the percentage"},
 {"show_detail",        "Show detail",       PK_BOOL,  PG_GAUGE,   GAUGE_ONLY, NULL,                                       "false",       "Add the underlying figures, e.g. 6.1 / 16.0 GB"},
@@ -511,8 +662,8 @@ static const PropDef g_props[] = {
 {"fill_gradient",      "Fill gradient",     PK_ENUM,  PG_GAUGE,   GAUGE_ONLY, "none|vertical|horizontal|diagonal|diagonal_back", "none", "Direction of the fill gradient"},
 {"track_color",        "Track",             PK_COLOR, PG_GAUGE,   GAUGE_ONLY, NULL,                                       "00000000",    "Unfilled portion; alpha 0 derives from the text colour"},
 {"thickness",          "Thickness",         PK_FLOAT, PG_GAUGE,   GAUGE_ONLY, NULL,                                       "8",           "Bar height, or ring stroke width, in pixels"},
-{"warn_above",         "Warn above",        PK_FLOAT, PG_GAUGE,   GAUGE_ONLY, NULL,                                       "0",           "Recolour the fill past this percentage; 0 never does"},
-{"warn_below",         "Warn below",        PK_FLOAT, PG_GAUGE,   GAUGE_ONLY, NULL,                                       "0",           "Recolour the fill under this percentage, for a draining battery"},
+{"warn_above",         "Warn above",        PK_FLOAT, PG_GAUGE,   GAUGE_ONLY, NULL,                                       "0",           "Recolour the fill past this percentage; 0 never does. One per reading"},
+{"warn_below",         "Warn below",        PK_FLOAT, PG_GAUGE,   GAUGE_ONLY, NULL,                                       "0",           "Recolour the fill under this percentage, for a draining battery. One per reading"},
 {"warn_color",         "Warning colour",    PK_COLOR, PG_GAUGE,   GAUGE_ONLY, NULL,                                       "00000000",    "Fill colour past the threshold"},
 
 {"week_start",         "Week starts",       PK_ENUM,  PG_CALENDAR, CALENDAR_ONLY, "locale|monday|sunday",                  "locale",      "First column of the grid"},
@@ -560,8 +711,13 @@ const char* Spec_DefaultFor(const PropDef* prop, int type) {
     bool wantsWidth = _stricmp(prop->key, "width") == 0;
     if (wantsWidth || _stricmp(prop->key, "height") == 0) {
         static char widthText[8], heightText[8];
+        WidgetSpec probe;
+        Spec_Defaults(&probe);
+        probe.type = type;
+        ResolveGauge(&probe.gauge, &probe.style);
+
         int width = 0, height = 0;
-        DefaultSize(type, &width, &height);
+        DefaultSize(&probe, &width, &height);
         _snprintf(widthText, sizeof(widthText), "%d", width);
         _snprintf(heightText, sizeof(heightText), "%d", height);
         return wantsWidth ? widthText : heightText;

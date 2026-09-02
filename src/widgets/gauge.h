@@ -22,19 +22,20 @@ typedef struct {
 } GaugeReading;
 
 /*
- * Take a reading for the gauge described by `spec`.
+ * Take every reading the gauge is configured for, in order, and return how
+ * many were written.
  *
  * CPU load is the difference between two samples, so the sample is shared
  * across every gauge rather than taken per widget: two of them measuring
  * different windows would disagree about the same number.
  */
-void Gauge_Read(const WidgetSpec* spec, GaugeReading* out);
+int Gauge_Read(const WidgetSpec* spec, GaugeReading* out, int cap);
 
 /*
  * Stateless painter, shared by the live widget and the settings preview, so
  * a preview is guaranteed to look exactly like the real thing.
  */
-void Gauge_Paint(const WidgetSpec* spec, const GaugeReading* reading,
+void Gauge_Paint(const WidgetSpec* spec, const GaugeReading* readings, int count,
                  GpGraphics* gfx, int width, int height);
 
 #endif /* GAUGE_H */

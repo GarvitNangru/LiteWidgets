@@ -8,22 +8,33 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
-- A `gauge` widget: CPU, memory, disk or battery, drawn as a bar, a ring or
-  just the number. Optional detail line -- `17.9 / 31.8 GB`, `1h 20m left` --
+- A `gauge` widget: CPU, memory, disk and battery, drawn as bars, rings or
+  just the numbers. Optional detail line -- `17.9 / 31.8 GB`, `1h 20m left` --
   and a warning colour past a threshold in either direction, because a disk
   filling up and a battery draining are trouble in opposite directions. Every
-  reading is one cheap system call on the widget's own schedule; a reading
-  that rounds to the same number it already drew does not repaint. The CPU
-  sample is shared across gauges, since load is a difference between two
-  readings and two widgets sampling independently would disagree.
+  reading is one cheap system call on its own schedule; a reading that rounds
+  to the same number it already drew does not repaint. The CPU sample is
+  shared across gauges, since load is a difference between two readings and
+  two widgets sampling independently would disagree.
+- One gauge holds as many readings as you list -- `source = cpu, memory,
+  disk, battery` -- because a machine panel is one thing, not four windows to
+  align by hand. `gauge_layout` stacks them, puts them in a row or lays them
+  out in a grid (`auto` stacks bars and rows up rings), with `gauge_columns`
+  and `gauge_spacing` for the rest. Every key that describes a reading takes
+  one value per reading: `drive = C:, D:`, `warn_above = 85, 90, 90, 0`,
+  `warn_below = 0, 0, 0, 20`. A single value still covers all of them, so the
+  one-reading spelling of every key is exactly what it was. Each reading
+  keeps its own refresh interval, so a disk beside a CPU is still queried
+  twice a minute rather than once a second.
 - A `calendar` widget: a month view with today marked. Locale, Monday or
   Sunday weeks, optional ISO week numbers, and the adjacent months dimmed in
   the margins. It checks the date four times an hour and repaints once a day.
 - `examples/dashboard.ini`, which arranges the new widgets as a status panel.
-- Widget types can carry their own default size. A gauge starts at 280x80
-  and a calendar at 300x290; the three older types keep 320x140, since
-  changing what an existing config resolves to would move widgets people
-  have already placed.
+- Widget types can carry their own default size. A calendar starts at
+  300x290, and a gauge is sized from its shape and how many readings it
+  holds -- 280x80 for a bar, 170x170 for a ring, multiplied out across the
+  grid. The three older types keep 320x140, since changing what an existing
+  config resolves to would move widgets people have already placed.
 
 - The `notes` widget is editable in place: click it and type. Mouse and
   keyboard selection, double-click for a word, clipboard, undo that folds a
@@ -75,6 +86,10 @@ All notable changes to this project are documented here. The format follows
   editing state, focusable and raised, while it was dragged around.
 - Widget positions were written to the INI without flushing the profile cache,
   so a reload straight after arranging could read back the old ones.
+- The settings preview disagreed with the file it was previewing. It read the
+  controls literally, while saving drops any field that only repeats its own
+  default -- so a size left to be derived was previewed at the default and
+  saved as nothing. Both now read a value the same way.
 - The settings editor silently dropped any property past its 96th. The cap now
   comes from `LW_MAX_PROPERTIES`, which `spec.c` asserts against the registry
   at compile time, so outgrowing it is a build error rather than a key that

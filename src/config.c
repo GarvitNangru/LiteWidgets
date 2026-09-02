@@ -178,9 +178,9 @@ void Config_Paint(const WidgetSpec* spec, const char* iniPath,
             break;
         }
         case WIDGET_GAUGE: {
-            GaugeReading reading;
-            Gauge_Read(spec, &reading);
-            Gauge_Paint(spec, &reading, gfx, width, height);
+            GaugeReading readings[LW_GAUGE_MAX];
+            int count = Gauge_Read(spec, readings, LW_GAUGE_MAX);
+            Gauge_Paint(spec, readings, count, gfx, width, height);
             break;
         }
         case WIDGET_CALENDAR: {

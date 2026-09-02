@@ -14,8 +14,11 @@
 typedef struct {
     Widget       base;
     WidgetSpec   spec;
-    GaugeReading reading;
-    int          last_signature;   /* changes only when the drawn text would */
+    GaugeReading readings[LW_GAUGE_MAX];
+    DWORD        due[LW_GAUGE_MAX];  /* tick at which each reading goes stale */
+    int          count;
+    unsigned     last_signature;     /* changes only when the drawn text would */
+    bool         drawn;              /* last_signature means nothing until then */
 } GaugeWidget;
 
 /* ─────────────────────────── sampling ─────────────────────────── */
@@ -133,13 +136,12 @@ static void ReadBattery(GaugeReading* out) {
     }
 }
 
-void Gauge_Read(const WidgetSpec* spec, GaugeReading* out) {
-    if (!spec || !out) return;
+static void ReadItem(const GaugeItem* item, GaugeReading* out) {
     memset(out, 0, sizeof(*out));
 
-    switch (spec->gauge.source) {
+    switch (item->source) {
         case GAUGE_MEMORY:  ReadMemory(out); break;
-        case GAUGE_DISK:    ReadDisk(spec->gauge.drive, out); break;
+        case GAUGE_DISK:    ReadDisk(item->drive, out); break;
         case GAUGE_BATTERY: ReadBattery(out); break;
         default:
             out->available = true;
@@ -149,6 +151,15 @@ void Gauge_Read(const WidgetSpec* spec, GaugeReading* out) {
 
     if (out->percent < 0.0f)   out->percent = 0.0f;
     if (out->percent > 100.0f) out->percent = 100.0f;
+}
+
+int Gauge_Read(const WidgetSpec* spec, GaugeReading* out, int cap) {
+    if (!spec || !out || cap <= 0) return 0;
+
+    int count = spec->gauge.count;
+    if (count > cap) count = cap;
+    for (int i = 0; i < count; i++) ReadItem(&spec->gauge.items[i], &out[i]);
+    return count;
 }
 
 /* ─────────────────────────── painting ─────────────────────────── */
@@ -163,14 +174,14 @@ static const WCHAR* DefaultLabel(int source) {
 }
 
 /* The fill colour a reading earns: past either threshold it changes to warn. */
-static bool IsWarning(const GaugeOptions* g, float percent) {
-    if (g->warn_above > 0.0f && percent >= g->warn_above) return true;
-    if (g->warn_below > 0.0f && percent <= g->warn_below) return true;
+static bool IsWarning(const GaugeItem* item, float percent) {
+    if (item->warn_above > 0.0f && percent >= item->warn_above) return true;
+    if (item->warn_below > 0.0f && percent <= item->warn_below) return true;
     return false;
 }
 
-static ARGB FillFor(const GaugeOptions* g, float percent) {
-    return IsWarning(g, percent) ? g->warn_color : g->fill_color;
+static ARGB FillFor(const GaugeOptions* g, const GaugeItem* item, float percent) {
+    return IsWarning(item, percent) ? g->warn_color : g->fill_color;
 }
 
 static void FillRounded(GpGraphics* gfx, ARGB c1, ARGB c2, int gradient,
@@ -208,17 +219,17 @@ static void ValueText(const GaugeReading* r, WCHAR* out, size_t cap) {
     out[cap - 1] = L'\0';
 }
 
-static void PaintBar(const WidgetSpec* spec, const GaugeReading* r,
-                     GpGraphics* gfx, float x, float y, float w, float h) {
+static void PaintBar(const WidgetSpec* spec, const GaugeItem* item, const GaugeReading* r,
+                     bool detailRow, GpGraphics* gfx, float x, float y, float w, float h) {
     const WidgetStyle* s = &spec->style;
     const GaugeOptions* g = &spec->gauge;
 
-    const WCHAR* label = g->label[0] ? g->label : DefaultLabel(g->source);
+    const WCHAR* label = item->label[0] ? item->label : DefaultLabel(item->source);
     WCHAR value[32];
     ValueText(r, value, 32);
 
     bool topRow  = g->show_label || g->show_value;
-    bool bottom  = g->show_detail && r->detail[0];
+    bool bottom  = detailRow;
 
     float gap      = s->font_size * 0.35f;
     float rowH     = s->font_size * 1.3f;
@@ -256,10 +267,10 @@ static void PaintBar(const WidgetSpec* spec, const GaugeReading* r,
     float filled = w * (r->available ? r->percent / 100.0f : 0.0f);
     /* Below one full cap the rounded ends collapse into a smear; skip it. */
     if (filled > thickness * 0.6f)
-        FillRounded(gfx, FillFor(g, r->percent), g->fill_color2, g->fill_gradient,
+        FillRounded(gfx, FillFor(g, item, r->percent), g->fill_color2, g->fill_gradient,
                     x, top, filled, thickness, radius);
 
-    if (!bottom) return;
+    if (!bottom || !r->detail[0]) return;
     top += thickness + gap * 0.6f;
 
     GpRectF row = { x, top, w, detailH };
@@ -268,13 +279,13 @@ static void PaintBar(const WidgetSpec* spec, const GaugeReading* r,
     Drawing_Text(gfx, &run);
 }
 
-static void PaintRing(const WidgetSpec* spec, const GaugeReading* r,
-                      GpGraphics* gfx, float x, float y, float w, float h) {
+static void PaintRing(const WidgetSpec* spec, const GaugeItem* item, const GaugeReading* r,
+                      bool detailRow, GpGraphics* gfx, float x, float y, float w, float h) {
     const WidgetStyle* s = &spec->style;
     const GaugeOptions* g = &spec->gauge;
 
-    const WCHAR* label = g->label[0] ? g->label : DefaultLabel(g->source);
-    bool caption = g->show_label || (g->show_detail && r->detail[0]);
+    const WCHAR* label = item->label[0] ? item->label : DefaultLabel(item->source);
+    bool caption = g->show_label || detailRow;
 
     /* The caption sits under the dial, so the dial gets what is left. */
     float captionH = caption ? s->font_size * 1.2f : 0.0f;
@@ -297,7 +308,7 @@ static void PaintRing(const WidgetSpec* spec, const GaugeReading* r,
     }
 
     float sweep = (r->available ? r->percent : 0.0f) * 3.6f;
-    ARGB fill = FillFor(g, r->percent);
+    ARGB fill = FillFor(g, item, r->percent);
     if (sweep > 0.5f && VISIBLE(fill)) {
         GpBrush* brush = Drawing_GradientBrush(&box, fill, g->fill_color2, g->fill_gradient);
         GpPen* arc = NULL;
@@ -331,20 +342,21 @@ static void PaintRing(const WidgetSpec* spec, const GaugeReading* r,
     if (!caption) return;
 
     const WCHAR* text = g->show_label ? label : r->detail;
+    if (!text[0]) return;
     GpRectF row = { x, y + dialH, w, captionH };
     TextRun run = Run(spec, text, row, s->font_size * 0.62f,
                       Style_ScaleAlpha(s->text_color, 0.65f), ALIGN_CENTER, ALIGN_CENTER);
     Drawing_Text(gfx, &run);
 }
 
-static void PaintNumber(const WidgetSpec* spec, const GaugeReading* r,
-                        GpGraphics* gfx, float x, float y, float w, float h) {
+static void PaintNumber(const WidgetSpec* spec, const GaugeItem* item, const GaugeReading* r,
+                        bool detailRow, GpGraphics* gfx, float x, float y, float w, float h) {
     const WidgetStyle* s = &spec->style;
     const GaugeOptions* g = &spec->gauge;
 
-    const WCHAR* label = g->label[0] ? g->label : DefaultLabel(g->source);
+    const WCHAR* label = item->label[0] ? item->label : DefaultLabel(item->source);
     bool top    = g->show_label;
-    bool bottom = g->show_detail && r->detail[0];
+    bool bottom = detailRow;
 
     float sideH = s->font_size * 0.85f;
     float valueY = y + (top ? sideH : 0.0f);
@@ -364,35 +376,66 @@ static void PaintNumber(const WidgetSpec* spec, const GaugeReading* r,
     TextRun run = Drawing_Run(s, value, box);
     run.no_wrap = true;
     run.align_v = ALIGN_CENTER;
-    if (r->available && IsWarning(g, r->percent)) {
+    if (r->available && IsWarning(item, r->percent)) {
         run.color = g->warn_color;
         run.gradient = GRAD_NONE;
     }
     Drawing_Text(gfx, &run);
 
-    if (!bottom) return;
+    if (!bottom || !r->detail[0]) return;
     GpRectF row = { x, valueY + valueH, w, sideH };
     TextRun detail = Run(spec, r->detail, row, s->font_size * 0.5f,
                          Style_ScaleAlpha(s->text_color, 0.6f), s->align_h, ALIGN_CENTER);
     Drawing_Text(gfx, &detail);
 }
 
-void Gauge_Paint(const WidgetSpec* spec, const GaugeReading* reading,
+void Gauge_Paint(const WidgetSpec* spec, const GaugeReading* readings, int count,
                  GpGraphics* gfx, int width, int height) {
-    if (!spec || !reading || !gfx || width <= 0 || height <= 0) return;
+    if (!spec || !readings || count <= 0 || !gfx || width <= 0 || height <= 0) return;
 
+    const GaugeOptions* g = &spec->gauge;
     Drawing_Surface(gfx, &spec->style, (float)width, (float)height);
 
     float pad = spec->style.padding;
-    float x = pad, y = pad;
     float w = (float)width - pad * 2.0f;
     float h = (float)height - pad * 2.0f;
     if (w <= 0.0f || h <= 0.0f) return;
 
-    switch (spec->gauge.style) {
-        case GAUGE_RING:   PaintRing(spec, reading, gfx, x, y, w, h);   break;
-        case GAUGE_NUMBER: PaintNumber(spec, reading, gfx, x, y, w, h); break;
-        default:           PaintBar(spec, reading, gfx, x, y, w, h);    break;
+    if (count > g->count) count = g->count;
+
+    /*
+     * The detail row is reserved for the whole widget or for none of it: a
+     * reading with nothing to say under it would otherwise centre its bar
+     * higher than the one beside it.
+     */
+    bool detailRow = false;
+    for (int i = 0; i < count && g->show_detail; i++)
+        if (readings[i].detail[0]) detailRow = true;
+
+    int cols = 1, rows = 1;
+    Spec_GaugeGrid(g, &cols, &rows);
+
+    /* One panel, one cell per reading -- so a machine panel is a widget. */
+    float cellW = (w - g->spacing * (float)(cols - 1)) / (float)cols;
+    float cellH = (h - g->spacing * (float)(rows - 1)) / (float)rows;
+    if (cellW <= 0.0f || cellH <= 0.0f) return;
+
+    for (int i = 0; i < count; i++) {
+        const GaugeItem* item = &g->items[i];
+        float x = pad + (float)(i % cols) * (cellW + g->spacing);
+        float y = pad + (float)(i / cols) * (cellH + g->spacing);
+
+        switch (g->style) {
+            case GAUGE_RING:
+                PaintRing(spec, item, &readings[i], detailRow, gfx, x, y, cellW, cellH);
+                break;
+            case GAUGE_NUMBER:
+                PaintNumber(spec, item, &readings[i], detailRow, gfx, x, y, cellW, cellH);
+                break;
+            default:
+                PaintBar(spec, item, &readings[i], detailRow, gfx, x, y, cellW, cellH);
+                break;
+        }
     }
 }
 
@@ -401,11 +444,11 @@ void Gauge_Paint(const WidgetSpec* spec, const GaugeReading* reading,
 /*
  * How often a reading is worth taking. CPU is the only one that moves fast
  * enough to justify a second; a disk that is 61% full will still be 61% full
- * in half a minute.
+ * in half a minute. Each reading keeps its own schedule, so putting a disk
+ * beside a CPU does not cost a volume query every second.
  */
-static UINT Gauge_NextInterval(Widget* base) {
-    GaugeWidget* w = (GaugeWidget*)base;
-    switch (w->spec.gauge.source) {
+static UINT SourceInterval(int source) {
+    switch (source) {
         case GAUGE_DISK:    return 30000;
         case GAUGE_BATTERY: return 10000;
         case GAUGE_MEMORY:  return 2000;
@@ -413,33 +456,56 @@ static UINT Gauge_NextInterval(Widget* base) {
     }
 }
 
+static UINT Gauge_NextInterval(Widget* base) {
+    GaugeWidget* w = (GaugeWidget*)base;
+    UINT soonest = 60000;
+
+    for (int i = 0; i < w->count; i++) {
+        UINT interval = SourceInterval(w->spec.gauge.items[i].source);
+        if (interval < soonest) soonest = interval;
+    }
+    return soonest;
+}
+
 /*
  * A stamp of what is actually on screen. The percentage is drawn rounded, so
  * a load wandering between 12.1 and 12.4 must not cost a repaint; the detail
  * line is folded in because it changes on its own schedule.
  */
-static int Signature(const GaugeWidget* w) {
-    int stamp = (int)(w->reading.percent + 0.5f) * 8;
-    if (!w->reading.available) stamp |= 1;
-    for (const WCHAR* p = w->reading.detail; *p; p++)
-        stamp += (int)*p;
+static unsigned Signature(const GaugeWidget* w) {
+    unsigned stamp = 0;
+    for (int i = 0; i < w->count; i++) {
+        const GaugeReading* r = &w->readings[i];
+        stamp = stamp * 131u + (unsigned)(int)(r->percent + 0.5f) * 8u;
+        if (!r->available) stamp |= 1u;
+        for (const WCHAR* p = r->detail; *p; p++)
+            stamp += (unsigned)*p;
+    }
     return stamp;
+}
+
+/* Refresh only the readings whose own interval has come round. */
+static void ReadDue(GaugeWidget* w) {
+    DWORD now = GetTickCount();
+    for (int i = 0; i < w->count; i++) {
+        if ((int)(now - w->due[i]) < 0) continue;
+        ReadItem(&w->spec.gauge.items[i], &w->readings[i]);
+        w->due[i] = now + SourceInterval(w->spec.gauge.items[i].source);
+    }
 }
 
 static void Gauge_Render(Widget* base, GpGraphics* gfx, int width, int height) {
     GaugeWidget* w = (GaugeWidget*)base;
-    Gauge_Read(&w->spec, &w->reading);
+    ReadDue(w);
     w->last_signature = Signature(w);
-    Gauge_Paint(&w->spec, &w->reading, gfx, width, height);
+    w->drawn = true;
+    Gauge_Paint(&w->spec, w->readings, w->count, gfx, width, height);
 }
 
 static void Gauge_OnTimer(Widget* base) {
     GaugeWidget* w = (GaugeWidget*)base;
-    GaugeReading previous = w->reading;
-
-    Gauge_Read(&w->spec, &w->reading);
-    if (Signature(w) != w->last_signature) base->needs_render = true;
-    else w->reading = previous;
+    ReadDue(w);
+    if (!w->drawn || Signature(w) != w->last_signature) base->needs_render = true;
 }
 
 static void Gauge_Destroy(Widget* base) {
@@ -459,7 +525,13 @@ bool GaugeWidget_Create(HINSTANCE hInstance, const WidgetSpec* spec) {
     if (!w) return false;
 
     w->spec = *spec;
-    w->last_signature = -1;
+    w->count = spec->gauge.count;
+    if (w->count < 1) w->count = 1;
+    if (w->count > LW_GAUGE_MAX) w->count = LW_GAUGE_MAX;
+
+    /* Due now, rather than at tick zero, so the schedule survives a wrap. */
+    DWORD now = GetTickCount();
+    for (int i = 0; i < w->count; i++) w->due[i] = now;
 
     if (!Widget_Init(&w->base, hInstance, &kGaugeVtable, spec, 1000)) {
         free(w);

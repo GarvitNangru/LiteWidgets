@@ -60,12 +60,48 @@ typedef enum {
 
 typedef enum { GAUGE_BAR = 0, GAUGE_RING, GAUGE_NUMBER } GaugeStyle;
 
+/* How several readings share one widget. AUTO is resolved in Spec_Finalize. */
+typedef enum {
+    GAUGE_LAYOUT_AUTO = 0,
+    GAUGE_LAYOUT_VERTICAL,
+    GAUGE_LAYOUT_HORIZONTAL,
+    GAUGE_LAYOUT_GRID
+} GaugeLayout;
+
+/* Readings one widget can carry. */
+#define LW_GAUGE_MAX 8
+
+/*
+ * One reading inside a gauge. The keys that describe it -- source, drive,
+ * label, the two thresholds -- all take a list, so a machine panel is one
+ * widget rather than four windows that have to be aligned by hand.
+ */
 typedef struct {
     int   source;               /* GaugeSource */
-    int   style;                /* GaugeStyle */
     char  drive[8];             /* which volume the disk source reads */
-
     WCHAR label[32];            /* empty derives a name from the source */
+
+    /*
+     * A reading past either threshold repaints the fill in the warning
+     * colour. Two of them because the direction that means trouble depends on
+     * the reading: a disk filling up warns high, a battery draining warns low.
+     */
+    float warn_above;           /* percent; 0 disables */
+    float warn_below;           /* percent; 0 disables */
+} GaugeItem;
+
+typedef struct {
+    GaugeItem items[LW_GAUGE_MAX];
+    int   count;                /* readings actually configured, at least 1 */
+
+    /* How many values each list key supplied, so Spec_Finalize can fill in. */
+    int   stated_drives, stated_labels, stated_above, stated_below;
+
+    int   style;                /* GaugeStyle, shared by every reading */
+    int   layout;               /* GaugeLayout */
+    int   columns;              /* grid columns; 0 derives a square-ish grid */
+    float spacing;              /* px between readings */
+
     bool  show_label;
     bool  show_value;
     bool  show_detail;          /* the second line: "6.1 / 16.0 GB" and friends */
@@ -75,14 +111,6 @@ typedef struct {
     ARGB  fill_color2;
     int   fill_gradient;
     float thickness;            /* bar height, or ring stroke width */
-
-    /*
-     * A reading past either threshold repaints the fill in the warning
-     * colour. Two of them because the direction that means trouble depends on
-     * the reading: a disk filling up warns high, a battery draining warns low.
-     */
-    float warn_above;           /* percent; 0 disables */
-    float warn_below;           /* percent; 0 disables */
     ARGB  warn_color;
 } GaugeOptions;
 
@@ -209,10 +237,19 @@ void Spec_Finalize(WidgetSpec* spec);
  */
 bool Spec_IsInteractive(int type);
 
+/* How a gauge's readings are tiled. Valid once Spec_Finalize has run. */
+void Spec_GaugeGrid(const GaugeOptions* gauge, int* columns, int* rows);
+
 /* ─────────────────────────── property registry ─────────────────────────── */
 
+/*
+ * PK_LIST is PK_ENUM's plural: a typed field whose value is one or more of
+ * `options`, which the editor offers from a dropdown that appends rather
+ * than replaces.
+ */
 typedef enum {
-    PK_TEXT = 0, PK_INT, PK_FLOAT, PK_COLOR, PK_BOOL, PK_ENUM, PK_FONT, PK_FILE
+    PK_TEXT = 0, PK_INT, PK_FLOAT, PK_COLOR, PK_BOOL, PK_ENUM, PK_FONT, PK_FILE,
+    PK_LIST
 } PropKind;
 
 typedef enum {
@@ -226,7 +263,7 @@ typedef struct {
     unsigned char kind;      /* PropKind */
     unsigned char group;     /* PropGroup */
     unsigned int  types;     /* bitmask of TYPE_BIT(WidgetType) */
-    const char*   options;   /* '|' separated choices for PK_ENUM */
+    const char*   options;   /* '|' separated choices for PK_ENUM and PK_LIST */
     const char*   def;       /* default, as it would appear in the INI */
     const char*   help;
 } PropDef;

@@ -27,6 +27,12 @@ Colours are hex `AARRGGBB`. `RRGGBB`, `#RGB` and `#ARGB` are also accepted
 and are expanded to full opacity where no alpha is given. An alpha of `00`
 means "off" for effects such as shadow, glow and outline.
 
+A key whose values read *list of* takes several, separated by commas:
+`source = cpu, memory, disk` puts three readings in one gauge. The keys
+that describe a reading -- `drive`, `label`, `warn_above`, `warn_below` --
+line up with that list position by position, and a single value covers
+every reading, so `warn_above = 90` still means what it looks like.
+
 ## General
 
 | Key | Applies to | Values | Default | Description |
@@ -137,10 +143,13 @@ means "off" for effects such as shadow, glow and outline.
 
 | Key | Applies to | Values | Default | Description |
 | --- | --- | --- | --- | --- |
-| `source` | gauge | `cpu`, `memory`, `disk`, `battery` | `cpu` | What the gauge measures |
+| `source` | gauge | list of `cpu`, `memory`, `disk`, `battery` | `cpu` | What the gauge measures; list several to put them in one widget |
 | `gauge_style` | gauge | `bar`, `ring`, `number` | `bar` | A track, an arc, or the number on its own |
-| `drive` | gauge | text | `C:` | Which volume the disk reading measures |
-| `label` | gauge | text | (none) | Blank names the gauge after its reading |
+| `gauge_layout` | gauge | `auto`, `vertical`, `horizontal`, `grid` | `auto` | How several readings are arranged; auto stacks bars and puts rings in a row |
+| `gauge_columns` | gauge | integer | `0` | Columns when the arrangement is a grid; 0 picks the squarest one |
+| `gauge_spacing` | gauge | number | `10` | Pixels between readings |
+| `drive` | gauge | text | `C:` | Which volume a disk reading measures; one per reading |
+| `label` | gauge | text | (none) | Blank names each reading after its source; one per reading |
 | `show_label` | gauge | true / false | `true` | Draw the label |
 | `show_value` | gauge | true / false | `true` | Draw the percentage |
 | `show_detail` | gauge | true / false | `false` | Add the underlying figures, e.g. 6.1 / 16.0 GB |
@@ -149,8 +158,8 @@ means "off" for effects such as shadow, glow and outline.
 | `fill_gradient` | gauge | `none`, `vertical`, `horizontal`, `diagonal`, `diagonal_back` | `none` | Direction of the fill gradient |
 | `track_color` | gauge | colour | `00000000` | Unfilled portion; alpha 0 derives from the text colour |
 | `thickness` | gauge | number | `8` | Bar height, or ring stroke width, in pixels |
-| `warn_above` | gauge | number | `0` | Recolour the fill past this percentage; 0 never does |
-| `warn_below` | gauge | number | `0` | Recolour the fill under this percentage, for a draining battery |
+| `warn_above` | gauge | number | `0` | Recolour the fill past this percentage; 0 never does. One per reading |
+| `warn_below` | gauge | number | `0` | Recolour the fill under this percentage, for a draining battery. One per reading |
 | `warn_color` | gauge | colour | `00000000` | Fill colour past the threshold |
 
 ## Calendar

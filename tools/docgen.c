@@ -28,6 +28,7 @@ static const char* KindName(int kind) {
         case PK_ENUM:  return "choice";
         case PK_FONT:  return "font name";
         case PK_FILE:  return "path";
+        case PK_LIST:  return "list";
         default:       return "text";
     }
 }
@@ -49,10 +50,12 @@ static void WriteTypes(FILE* out, unsigned int types) {
 
 /* Enum choices are stored pipe-separated; "@presets" expands at runtime. */
 static void WriteChoices(FILE* out, const PropDef* prop) {
-    if (prop->kind != PK_ENUM || !prop->options) {
+    bool choices = (prop->kind == PK_ENUM || prop->kind == PK_LIST);
+    if (!choices || !prop->options) {
         fprintf(out, "%s", KindName(prop->kind));
         return;
     }
+    if (prop->kind == PK_LIST) fputs("list of ", out);
     if (strcmp(prop->options, "@presets") == 0) {
         int count = 0;
         const StylePreset* presets = Style_Presets(&count);
@@ -99,7 +102,12 @@ static void WriteReference(FILE* out) {
           "`preset` supplies a themed set of defaults that individual keys override.\n\n"
           "Colours are hex `AARRGGBB`. `RRGGBB`, `#RGB` and `#ARGB` are also accepted\n"
           "and are expanded to full opacity where no alpha is given. An alpha of `00`\n"
-          "means \"off\" for effects such as shadow, glow and outline.\n\n", out);
+          "means \"off\" for effects such as shadow, glow and outline.\n\n"
+          "A key whose values read *list of* takes several, separated by commas:\n"
+          "`source = cpu, memory, disk` puts three readings in one gauge. The keys\n"
+          "that describe a reading -- `drive`, `label`, `warn_above`, `warn_below` --\n"
+          "line up with that list position by position, and a single value covers\n"
+          "every reading, so `warn_above = 90` still means what it looks like.\n\n", out);
 
     int count = 0;
     const PropDef* props = Spec_Properties(&count);
